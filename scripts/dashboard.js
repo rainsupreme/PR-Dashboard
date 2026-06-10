@@ -254,6 +254,14 @@ Promise.all([
       if (!reviewUrls.has(url)) setOverride(url, null);
     });
 
+    // Prune read markers for PRs no longer in any open list
+    const allOpenUrls = new Set([...data.to_review, ...data.open_prs, ...(data.reviewed_open || [])].map(pr => pr.url));
+    const staleMarkers = getReadMarkers();
+    Object.keys(staleMarkers).forEach(url => {
+      if (!allOpenUrls.has(url)) { delete staleMarkers[url]; }
+    });
+    localStorage.setItem(READ_MARKERS_KEY, JSON.stringify(staleMarkers));
+
     function updateMoveCounts() {
       const overrides = getOverrides();
       const movedCount = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open").length;
