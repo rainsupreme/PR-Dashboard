@@ -59,6 +59,35 @@ function setOverride(url, target) {
   localStorage.setItem(OVERRIDES_KEY, JSON.stringify(o));
 }
 
+const READ_MARKERS_KEY = "dashboard-read-markers";
+function getReadMarkers() {
+  try { return JSON.parse(localStorage.getItem(READ_MARKERS_KEY)) || {}; } catch { return {}; }
+}
+function setReadMarker(url) {
+  const m = getReadMarkers();
+  m[url] = new Date().toISOString();
+  localStorage.setItem(READ_MARKERS_KEY, JSON.stringify(m));
+}
+function getUnreadActivity(pr) {
+  if (!pr.activity || pr.activity.length === 0) return [];
+  const markers = getReadMarkers();
+  // Use read marker if set, otherwise use last_push as the baseline
+  const since = markers[pr.url] || pr.last_push || pr.created;
+  if (!since) return pr.activity;
+  return pr.activity.filter(a => a.created_at > since);
+}
+
+function renderActivityItem(item, isUnread) {
+  const typeClass = `activity-type-${item.type}`;
+  const label = item.type === "review" ? (item.state || "review").toLowerCase() : item.type;
+  return `<div class="activity-item${isUnread ? " unread" : ""}">
+    <img class="activity-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
+    <span class="activity-type ${typeClass}">${label}</span>
+    <span class="activity-body">${escapeHtml(item.author)}: ${escapeHtml(item.body)}</span>
+    <span class="activity-time">${timeAgo(item.created_at)}</span>
+  </div>`;
+}
+
 function renderPR(pr, type, moveBtn) {
   let badge = "";
   if (type === "closed") {
@@ -74,13 +103,38 @@ function renderPR(pr, type, moveBtn) {
   const authorLine = type === "review" ? `<span>@${escapeHtml(pr.author)}</span>` : "";
   const moveBtnHtml = moveBtn || "";
 
+  const hasActivity = pr.activity && pr.activity.length > 0 && type !== "closed";
+  let unreadBadge = "";
+  let activitySection = "";
+
+  if (hasActivity) {
+    const unread = getUnreadActivity(pr);
+    unreadBadge = unread.length > 0
+      ? `<span class="pr-badge badge-unread">${unread.length} new</span>`
+      : "";
+    const unreadTimes = new Set(unread.map(a => a.created_at));
+    const actId = `activity-${pr.repo}-${pr.number}`;
+    const items = pr.activity.slice(0, 10).map(a =>
+      renderActivityItem(a, unreadTimes.has(a.created_at))
+    ).join("");
+    activitySection = `
+      <div class="activity-section" id="${actId}">
+        ${items}
+        <button class="mark-read-btn" data-url="${escapeAttr(pr.url)}" data-target="${actId}">✓ Mark read</button>
+      </div>`;
+  }
+
+  const toggleBtn = hasActivity
+    ? `<button class="activity-toggle" data-target="activity-${pr.repo}-${pr.number}">▸ activity</button>`
+    : "";
+
   return `<div class="pr-item">
     <img class="pr-avatar" src="${escapeAttr(pr.avatar)}" alt="" loading="lazy">
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(pr.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(pr.title)}</a>
         <span class="pr-number">#${pr.number}</span>
-        ${badge}${staleBadge}
+        ${badge}${staleBadge}${unreadBadge}
         ${moveBtnHtml}
       </div>
       <div class="pr-meta">
@@ -88,7 +142,9 @@ function renderPR(pr, type, moveBtn) {
         ${authorLine}
         <span>${dateLabel}</span>
         ${pr.comments > 0 ? `<span>${pr.comments} comments</span>` : ""}
+        ${toggleBtn}
       </div>
+      ${activitySection}
     </div>
   </div>`;
 }
@@ -360,6 +416,28 @@ Promise.all([
     renderIssues();
     renderReviewed();
     renderClosed();
+
+    // Event delegation for activity toggles and mark-read buttons
+    document.addEventListener("click", (e) => {
+      const toggle = e.target.closest(".activity-toggle");
+      if (toggle) {
+        e.stopPropagation();
+        const section = document.getElementById(toggle.dataset.target);
+        if (section) {
+          const isOpen = section.classList.toggle("open");
+          toggle.textContent = isOpen ? "▾ activity" : "▸ activity";
+        }
+        return;
+      }
+      const markBtn = e.target.closest(".mark-read-btn");
+      if (markBtn) {
+        e.stopPropagation();
+        setReadMarker(markBtn.dataset.url);
+        // Re-render the containing list to update badges
+        renderReview(); renderReviewedOpen(); renderOpen();
+        return;
+      }
+    });
   })
   .catch(err => {
     document.getElementById("list-review").innerHTML = `<div class="loading">Failed to load data: ${escapeHtml(err.message)}</div>`;

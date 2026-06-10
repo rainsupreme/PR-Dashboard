@@ -126,6 +126,22 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .repo-chip:hover { border-color: var(--color-accent-emphasis); }
 .repo-chip input { margin: 0; }
 .repo-chip.select-all { font-family: inherit; font-weight: 500; }
+.badge-unread { background: var(--color-accent-subtle); color: var(--color-accent-fg); font-variant-numeric: tabular-nums; }
+.activity-toggle { background: none; border: none; font-size: 11px; color: var(--color-accent-fg); cursor: pointer; padding: 2px 0; font-family: inherit; }
+.activity-toggle:hover { text-decoration: underline; }
+.activity-section { display: none; margin-top: 8px; padding: 8px 0 0; border-top: 1px solid var(--color-border-muted); }
+.activity-section.open { display: block; }
+.activity-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; font-size: 12px; color: var(--color-fg-muted); }
+.activity-item.unread { color: var(--color-fg-default); font-weight: 500; }
+.activity-avatar { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; margin-top: 1px; }
+.activity-body { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-type { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 5px; border-radius: 2em; flex-shrink: 0; }
+.activity-type-comment { background: var(--color-accent-subtle); color: var(--color-accent-fg); }
+.activity-type-review { background: var(--color-success-subtle); color: var(--color-success-fg); }
+.activity-type-commit { background: var(--color-neutral-subtle); color: var(--color-fg-muted); }
+.activity-time { font-size: 11px; color: var(--color-fg-subtle); flex-shrink: 0; }
+.mark-read-btn { background: none; border: 1px solid var(--color-border-default); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--color-fg-muted); cursor: pointer; margin-top: 6px; }
+.mark-read-btn:hover { border-color: var(--color-accent-emphasis); color: var(--color-accent-fg); }
 </style>
 </head>
 <body>
