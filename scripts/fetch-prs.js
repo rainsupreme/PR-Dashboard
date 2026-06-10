@@ -155,6 +155,85 @@ async function fetchForOrg(org) {
   return { reviewItems, openItems, closedItems, reviewedOpenItems, reviewedByItems, mentionItems, assignedIssueItems, authoredIssueItems };
 }
 
+function mapComment(item) {
+  const user = item.user || {};
+  return {
+    author: user.login || "ghost",
+    avatar: user.avatar_url || "",
+    body: (item.body || "").slice(0, 200),
+    created_at: item.created_at,
+    type: "comment",
+  };
+}
+
+function mapReview(item) {
+  const user = item.user || {};
+  return {
+    author: user.login || "ghost",
+    avatar: user.avatar_url || "",
+    body: (item.body || "").slice(0, 200),
+    created_at: item.submitted_at,
+    type: "review",
+    state: item.state, // APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED
+  };
+}
+
+function mapCommit(item) {
+  const author = item.author || item.committer || {};
+  return {
+    author: author.login || (item.commit?.author?.name) || "ghost",
+    avatar: author.avatar_url || "",
+    body: (item.commit?.message || "").split("\n")[0].slice(0, 200),
+    created_at: item.commit?.committer?.date || item.commit?.author?.date || "",
+    type: "commit",
+  };
+}
+
+async function fetchActivity(pr) {
+  const [org, repo] = pr.url.replace("https://github.com/", "").split("/");
+  const base = `https://api.github.com/repos/${org}/${repo}`;
+
+  let commits = [], reviews = [], comments = [];
+
+  try {
+    const { body: c } = await request(`${base}/pulls/${pr.number}/commits?per_page=100`);
+    commits = c;
+  } catch (e) { console.warn(`  Failed to fetch commits for #${pr.number}: ${e.message}`); }
+
+  try {
+    const { body: r } = await request(`${base}/pulls/${pr.number}/reviews?per_page=100`);
+    reviews = r;
+  } catch (e) { console.warn(`  Failed to fetch reviews for #${pr.number}: ${e.message}`); }
+
+  try {
+    const { body: ic } = await request(`${base}/issues/${pr.number}/comments?per_page=100`);
+    comments = ic;
+  } catch (e) { console.warn(`  Failed to fetch comments for #${pr.number}: ${e.message}`); }
+
+  const last_push = commits.length > 0
+    ? commits[commits.length - 1].commit?.committer?.date || commits[commits.length - 1].commit?.author?.date || ""
+    : "";
+
+  const activity = [
+    ...commits.map(mapCommit),
+    ...reviews.filter(r => r.state !== "PENDING").map(mapReview),
+    ...comments.map(mapComment),
+  ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  return { last_push, activity };
+}
+
+async function enrichWithActivity(prs, label) {
+  if (prs.length === 0) return prs;
+  console.log(`\n  Fetching activity for ${prs.length} ${label} PRs...`);
+  const enriched = [];
+  for (const pr of prs) {
+    const { last_push, activity } = await fetchActivity(pr);
+    enriched.push({ ...pr, last_push, activity });
+  }
+  return enriched;
+}
+
 async function main() {
   if (ORGS.length === 0) {
     console.error("No orgs configured. Set \"orgs\" in config.json (e.g. [\"my-org\"]).");
@@ -192,6 +271,11 @@ async function main() {
   const reviewedBy = allReviewedByItems.map(mapPR);
   const mentions = allMentionItems.map(mapMention);
 
+  // Enrich open PRs with activity (commits, reviews, comments)
+  const toReviewEnriched = await enrichWithActivity(toReview, "to-review");
+  const openPrsEnriched = await enrichWithActivity(openPrs, "your-open");
+  const reviewedOpenEnriched = await enrichWithActivity(reviewedOpen, "reviewed-open");
+
   const assignedSet = new Set(allAssignedIssueItems.map((i) => i.html_url));
   const authoredSet = new Set(allAuthoredIssueItems.map((i) => i.html_url));
   const allIssueItems = [...allAssignedIssueItems, ...allAuthoredIssueItems];
@@ -213,18 +297,18 @@ async function main() {
     github_user: GITHUB_USER,
     orgs: ORGS,
     updated: new Date().toISOString(),
-    to_review: toReview,
-    open_prs: openPrs,
+    to_review: toReviewEnriched,
+    open_prs: openPrsEnriched,
     closed_prs: closedPrs,
-    reviewed_open: reviewedOpen,
+    reviewed_open: reviewedOpenEnriched,
     reviewed_by: reviewedBy,
     mentions,
     issues,
     counts: {
-      to_review: toReview.length,
-      open: openPrs.length,
+      to_review: toReviewEnriched.length,
+      open: openPrsEnriched.length,
       closed: closedPrs.length,
-      reviewed_open: reviewedOpen.length,
+      reviewed_open: reviewedOpenEnriched.length,
       reviewed_by: reviewedBy.length,
       mentions: mentions.length,
       issues: issues.length,
@@ -243,7 +327,7 @@ async function main() {
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { mapPR, mapMention, request, searchAll, sleep };
+  module.exports = { mapPR, mapMention, mapComment, mapReview, mapCommit, fetchActivity, request, searchAll, sleep };
 }
 
 if (require.main === module) {

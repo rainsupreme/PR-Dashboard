@@ -1,6 +1,6 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { mapPR, mapMention } = require("../scripts/fetch-prs.js");
+const { mapPR, mapMention, mapComment, mapReview, mapCommit } = require("../scripts/fetch-prs.js");
 
 describe("mapPR", () => {
   const baseItem = {
@@ -98,5 +98,95 @@ describe("mapMention", () => {
   it("handles missing user", () => {
     const noUser = { ...baseItem, user: null };
     assert.equal(mapMention(noUser).author, "ghost");
+  });
+});
+
+describe("mapComment", () => {
+  const baseComment = {
+    user: { login: "reviewer1", avatar_url: "https://avatars.githubusercontent.com/u/3" },
+    body: "Looks good, just one nit on line 42.",
+    created_at: "2024-05-10T14:30:00Z",
+  };
+
+  it("maps comment fields correctly", () => {
+    const result = mapComment(baseComment);
+    assert.equal(result.author, "reviewer1");
+    assert.equal(result.type, "comment");
+    assert.equal(result.created_at, "2024-05-10T14:30:00Z");
+    assert.ok(result.body.includes("one nit"));
+  });
+
+  it("truncates long bodies to 200 chars", () => {
+    const long = { ...baseComment, body: "x".repeat(500) };
+    assert.equal(mapComment(long).body.length, 200);
+  });
+
+  it("handles missing user", () => {
+    const noUser = { ...baseComment, user: null };
+    assert.equal(mapComment(noUser).author, "ghost");
+  });
+
+  it("handles null body", () => {
+    const noBody = { ...baseComment, body: null };
+    assert.equal(mapComment(noBody).body, "");
+  });
+});
+
+describe("mapReview", () => {
+  const baseReview = {
+    user: { login: "approver", avatar_url: "https://avatars.githubusercontent.com/u/4" },
+    body: "LGTM!",
+    submitted_at: "2024-05-11T09:00:00Z",
+    state: "APPROVED",
+  };
+
+  it("maps review fields correctly", () => {
+    const result = mapReview(baseReview);
+    assert.equal(result.author, "approver");
+    assert.equal(result.type, "review");
+    assert.equal(result.state, "APPROVED");
+    assert.equal(result.created_at, "2024-05-11T09:00:00Z");
+  });
+
+  it("maps CHANGES_REQUESTED state", () => {
+    const changes = { ...baseReview, state: "CHANGES_REQUESTED" };
+    assert.equal(mapReview(changes).state, "CHANGES_REQUESTED");
+  });
+
+  it("handles missing user", () => {
+    const noUser = { ...baseReview, user: null };
+    assert.equal(mapReview(noUser).author, "ghost");
+  });
+});
+
+describe("mapCommit", () => {
+  const baseCommit = {
+    author: { login: "dev123", avatar_url: "https://avatars.githubusercontent.com/u/1" },
+    committer: { login: "dev123", avatar_url: "https://avatars.githubusercontent.com/u/1" },
+    commit: {
+      message: "Fix memory leak in hash table resize\n\nThis addresses the OOM issue.",
+      author: { name: "Dev", date: "2024-05-09T16:00:00Z" },
+      committer: { name: "Dev", date: "2024-05-09T16:00:00Z" },
+    },
+  };
+
+  it("uses first line of commit message as body", () => {
+    const result = mapCommit(baseCommit);
+    assert.equal(result.body, "Fix memory leak in hash table resize");
+    assert.equal(result.type, "commit");
+  });
+
+  it("uses committer date as created_at", () => {
+    assert.equal(mapCommit(baseCommit).created_at, "2024-05-09T16:00:00Z");
+  });
+
+  it("falls back to author login from commit when no top-level author", () => {
+    const noAuthor = { ...baseCommit, author: null, committer: null };
+    assert.equal(mapCommit(noAuthor).author, "Dev");
+  });
+
+  it("handles completely missing author info", () => {
+    const bare = { commit: { message: "test", author: null, committer: null } };
+    assert.equal(mapCommit(bare).author, "ghost");
   });
 });
