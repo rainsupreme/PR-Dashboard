@@ -71,10 +71,8 @@ function setReadMarker(url) {
 function getUnreadActivity(pr) {
   if (!pr.activity || pr.activity.length === 0) return [];
   const markers = getReadMarkers();
-  // Use read marker if set, otherwise use last_push as the baseline
   const since = markers[pr.url] || pr.last_push || pr.created;
-  if (!since) return pr.activity;
-  return pr.activity.filter(a => a.created_at > since);
+  return filterUnreadActivity(pr.activity, since);
 }
 
 function renderActivityItem(item, isUnread) {

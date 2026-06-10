@@ -38,6 +38,12 @@ function sortPRs(prs, sortBy) {
   });
 }
 
+function filterUnreadActivity(activity, since) {
+  if (!activity || activity.length === 0) return [];
+  if (!since) return activity;
+  return activity.filter(a => a.created_at > since);
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs };
+  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity };
 }

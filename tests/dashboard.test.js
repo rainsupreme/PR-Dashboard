@@ -1,6 +1,6 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { timeAgo, daysOld, escapeAttr, formatDate, sortPRs } = require("../scripts/utils.js");
+const { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity } = require("../scripts/utils.js");
 
 describe("timeAgo", () => {
   it("returns empty string for falsy input", () => {
@@ -118,5 +118,42 @@ describe("sortPRs", () => {
     const original = [...prs];
     sortPRs(prs, "comments");
     assert.deepEqual(prs, original);
+  });
+});
+
+describe("filterUnreadActivity", () => {
+  const activity = [
+    { created_at: "2024-06-01T10:00:00Z", type: "comment", body: "old" },
+    { created_at: "2024-06-05T10:00:00Z", type: "review", body: "mid" },
+    { created_at: "2024-06-10T10:00:00Z", type: "commit", body: "new" },
+  ];
+
+  it("returns all activity when since is falsy", () => {
+    assert.equal(filterUnreadActivity(activity, "").length, 3);
+    assert.equal(filterUnreadActivity(activity, null).length, 3);
+    assert.equal(filterUnreadActivity(activity, undefined).length, 3);
+  });
+
+  it("filters activity after a given timestamp", () => {
+    const result = filterUnreadActivity(activity, "2024-06-03T00:00:00Z");
+    assert.equal(result.length, 2);
+    assert.equal(result[0].body, "mid");
+    assert.equal(result[1].body, "new");
+  });
+
+  it("returns empty when all activity is before since", () => {
+    const result = filterUnreadActivity(activity, "2024-06-11T00:00:00Z");
+    assert.equal(result.length, 0);
+  });
+
+  it("returns empty for null/empty activity", () => {
+    assert.deepEqual(filterUnreadActivity(null, "2024-01-01"), []);
+    assert.deepEqual(filterUnreadActivity([], "2024-01-01"), []);
+  });
+
+  it("uses string comparison (ISO timestamps sort correctly)", () => {
+    const result = filterUnreadActivity(activity, "2024-06-05T10:00:00Z");
+    assert.equal(result.length, 1);
+    assert.equal(result[0].body, "new");
   });
 });
