@@ -1,0 +1,13 @@
+{
+  "name": "pr-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal PR Dashboard for GitHub Pages",
+  "scripts": {
+    "test": "node --test tests/",
+    "fetch": "node scripts/fetch-prs.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
