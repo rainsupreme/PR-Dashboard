@@ -21,8 +21,45 @@ Each tab has:
 Other features:
 - GitHub Primer color scheme (light/dark/system toggle)
 - Mobile responsive
-- Auto-refreshes daily via GitHub Actions
+- Auto-refreshes hourly via GitHub Actions
 - Zero dependencies — single HTML file + JSON data
+
+## Triage
+
+Your in-flight PRs (**Working On** and **Reviewed (Open)**) are enriched via
+the GitHub GraphQL API with the signals that tell you *where the ball is*:
+
+- **Review decision** — ✓ approved / ✗ changes requested
+- **Mergeable state** — ⚠ conflicts when a rebase is needed
+- **Unresolved review threads** — count of open conversations
+- **CI** — per-job status dots, summarized as green / failing
+
+When a PR is fully clear these collapse into one composite chip —
+`✓ approved · green · mergeable` — otherwise the specific state chips show.
+
+These feed a **Triage (needs action)** sort, the default on the *Needs
+Review*, *Reviewed (Open)*, and *Working On* tabs (chronological sorts remain
+as options). It ranks by urgency:
+
+1. Queued for merge but broken (CI red / conflict)
+2. CI failing
+3. Changes requested
+4. Merge conflict
+5. Unresolved review threads
+6. Ready to land but not yet queued (nudge a maintainer)
+7. Stale review request (> 7 days)
+
+PRs with nothing actionable *and* no new activity are dimmed; anything
+needing action stays highlighted even when quiet.
+
+## Merge labels
+
+Set `merge_labels` in `config.json` to flag PRs a maintainer has queued for
+merge (e.g. Valkey's `to_be_merged`). Matching labels render in their real
+GitHub color and feed the triage ranking — kept visually and semantically
+distinct from the mechanical readiness signal above. A PR that is mechanically
+ready but *not* yet labelled sorts as "nudge a maintainer"; one that is
+labelled *and* healthy sinks to the bottom ("just waiting").
 
 ## Fork & Personalize
 
@@ -37,9 +74,12 @@ Other features:
    ```json
    {
      "orgs": ["your-org"],
-     "title": "PR Dashboard"
+     "title": "PR Dashboard",
+     "merge_labels": ["to_be_merged"]
    }
    ```
+   `merge_labels` is optional — list any repo labels your project uses to mark
+   PRs as queued for merge. Leave it out (or empty) to disable label flagging.
 5. Push — the workflow deploys your personalized dashboard automatically
 
 That's it. Your dashboard will be live at `https://<username>.github.io/PersonalDashboard/`
@@ -51,11 +91,12 @@ Multiple orgs are fully supported — data from all orgs is merged into a single
 ## How It Works
 
 ```
-config.json          ← your org + preferences
-scripts/fetch-prs.js ← queries GitHub Search API, writes data/prs.json
-data/prs.json        ← all PR/issue data (refreshed at deploy time)
+config.json          ← your org + preferences (incl. merge_labels)
+scripts/fetch-prs.js ← queries GitHub Search + GraphQL APIs, writes data/prs.json
+data/prs.json        ← all PR/issue data + triage signals (refreshed at deploy time)
 index.html           ← single-page dashboard (fetches data/prs.json)
-.github/workflows/   ← daily cron + push + manual trigger
+scripts/utils.js     ← shared logic (sorting, triage scoring) — also unit-tested
+.github/workflows/   ← hourly cron + push + manual trigger
 ```
 
 The GitHub Actions workflow:

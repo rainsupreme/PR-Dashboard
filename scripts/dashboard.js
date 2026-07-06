@@ -50,6 +50,18 @@ function escapeHtml(str) {
 
 const OVERRIDES_KEY = "dashboard-overrides";
 let DASHBOARD_USER = "";
+let DASHBOARD_MERGE_LABELS = ["to_be_merged"];
+
+// Pick readable text color (black/white) for a GitHub label's hex background.
+function labelTextColor(hex) {
+  if (!/^[0-9a-fA-F]{6}$/.test(hex || "")) return "var(--color-fg-default)";
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  // Perceived luminance (ITU-R BT.601)
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.6 ? "#1f2328" : "#ffffff";
+}
 function getOverrides() {
   try { return JSON.parse(localStorage.getItem(OVERRIDES_KEY)) || {}; } catch { return {}; }
 }
@@ -172,7 +184,39 @@ function renderPR(pr, type, moveBtn) {
     }).join("");
   }
 
-  const itemClass = (hasActivity && !hasUnread) ? "pr-item pr-quiet" : "pr-item";
+  // Triage signal badges (review decision / CI / mergeable / threads).
+  // When fully clear, collapse to one composite chip; otherwise show specifics.
+  let signalBadges = "";
+  if (type !== "closed") {
+    const parts = [];
+    if (isClearToLand(pr)) {
+      parts.push(`<span class="pr-badge badge-ready">✓ approved · green · mergeable</span>`);
+    } else {
+      if (pr.review_decision === "APPROVED") parts.push(`<span class="pr-badge badge-approved">✓ approved</span>`);
+      else if (pr.review_decision === "CHANGES_REQUESTED") parts.push(`<span class="pr-badge badge-changes">✗ changes requested</span>`);
+      const ci = ciState(pr);
+      if (ci === "failure") parts.push(`<span class="pr-badge badge-ci-fail">✗ CI failing</span>`);
+      else if (ci === "success") parts.push(`<span class="pr-badge badge-ci-ok">✓ green</span>`);
+      if (pr.mergeable === "CONFLICTING") parts.push(`<span class="pr-badge badge-conflict">⚠ conflicts</span>`);
+    }
+    if ((pr.unresolved_threads || 0) > 0) {
+      parts.push(`<span class="pr-badge badge-threads">${pr.unresolved_threads} unresolved</span>`);
+    }
+    signalBadges = parts.join("");
+  }
+
+  // Maintainer-applied merge label(s), rendered in the label's real GitHub color.
+  let mergeLabelBadges = "";
+  (pr.labels || []).forEach(l => {
+    if (DASHBOARD_MERGE_LABELS.includes(l.name)) {
+      const hex = /^[0-9a-fA-F]{6}$/.test(l.color || "") ? `#${l.color}` : "";
+      const style = hex ? `background:${hex};color:${labelTextColor(l.color)};border-color:${hex}` : "";
+      mergeLabelBadges += `<span class="pr-badge pr-merge-label" style="${style}">${escapeHtml(l.name)}</span>`;
+    }
+  });
+
+  const actionable = isActionable(pr, { mergeLabels: DASHBOARD_MERGE_LABELS });
+  const itemClass = (hasActivity && !hasUnread && !actionable) ? "pr-item pr-quiet" : "pr-item";
 
   return `<div class="${itemClass}">
     <img class="pr-avatar" src="${escapeAttr(pr.avatar)}" alt="" loading="lazy">
@@ -180,7 +224,7 @@ function renderPR(pr, type, moveBtn) {
       <div class="pr-title-row">
         <a href="${escapeAttr(pr.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(pr.title)}</a>
         <span class="pr-number">#${pr.number}</span>
-        ${badge}${staleBadge}${unreadBadge}
+        ${badge}${staleBadge}${mergeLabelBadges}${signalBadges}${unreadBadge}
         ${moveBtnHtml}
         ${ciDots ? `<span class="ci-dots">${ciDots}</span>` : ""}
       </div>
@@ -294,6 +338,7 @@ Promise.all([
       document.getElementById("github-link").href = `https://github.com/${encodeURIComponent(config.github_user)}/PersonalDashboard`;
     }
     DASHBOARD_USER = data.github_user || config.github_user || "";
+    if (Array.isArray(config.merge_labels)) DASHBOARD_MERGE_LABELS = config.merge_labels;
     const userLabel = data.github_user ? `@${data.github_user} • ` : "";
     const updatedLabel = data.updated ? `Updated ${formatDate(data.updated)}` : "Run the workflow to populate data";
     document.getElementById("subtitle").textContent = `${userLabel}${updatedLabel}`;
@@ -337,7 +382,7 @@ Promise.all([
       const repos = getSelectedRepos("repo-checkboxes-review");
       const sort = document.getElementById("filter-review-sort").value;
       let filtered = data.to_review.filter(pr => repos.has(pr.repo) && overrides[pr.url] !== "reviewed-open");
-      filtered = sortPRs(filtered, sort);
+      filtered = sortPRs(filtered, sort, { type: "review", mergeLabels: DASHBOARD_MERGE_LABELS });
       document.getElementById("list-review").innerHTML = filtered.length
         ? filtered.map(pr => renderPR(pr, "review",
             `<button class="move-btn" data-url="${escapeAttr(pr.url)}" data-action="mark-reviewed">✓ Reviewed</button>`
@@ -356,7 +401,7 @@ Promise.all([
       const movedFromReview = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open" && repos.has(pr.repo));
       let filtered = (data.reviewed_open || []).filter(pr => repos.has(pr.repo));
       filtered = [...movedFromReview, ...filtered.filter(pr => !movedFromReview.some(m => m.url === pr.url))];
-      filtered = sortPRs(filtered, sort);
+      filtered = sortPRs(filtered, sort, { type: "reviewed-open", mergeLabels: DASHBOARD_MERGE_LABELS });
       document.getElementById("list-reviewed-open").innerHTML = filtered.length
         ? filtered.map(pr => {
             const isManual = overrides[pr.url] === "reviewed-open";
@@ -376,7 +421,7 @@ Promise.all([
       const repos = getSelectedRepos("repo-checkboxes-open");
       const sort = document.getElementById("filter-open-sort").value;
       let filtered = data.open_prs.filter(pr => repos.has(pr.repo));
-      filtered = sortPRs(filtered, sort);
+      filtered = sortPRs(filtered, sort, { type: "open", mergeLabels: DASHBOARD_MERGE_LABELS });
       document.getElementById("list-open").innerHTML = filtered.length
         ? filtered.map(pr => renderPR(pr, "open")).join("")
         : `<div class="loading">No PRs match the filter</div>`;

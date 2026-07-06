@@ -3,5 +3,8 @@
   "orgs": [
     "valkey-io"
   ],
-  "title": "PR Dashboard"
+  "title": "PR Dashboard",
+  "merge_labels": [
+    "to_be_merged"
+  ]
 }

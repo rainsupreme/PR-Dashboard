@@ -55,6 +55,55 @@ function request(url, retries = MAX_RETRIES) {
   });
 }
 
+async function graphql(query, variables, retries = MAX_RETRIES) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({ query, variables });
+    const headers = {
+      "User-Agent": "PersonalDashboard/1.0",
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(payload),
+    };
+    if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
+
+    const req = https.request(
+      "https://api.github.com/graphql",
+      { method: "POST", headers },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", async () => {
+          if ((res.statusCode === 403 || res.statusCode === 429) && retries > 0) {
+            const retryAfter = res.headers["retry-after"];
+            const waitSec = retryAfter ? parseInt(retryAfter, 10) : Math.pow(2, MAX_RETRIES - retries + 1);
+            console.warn(`GraphQL rate limited (${res.statusCode}). Retrying in ${waitSec}s... (${retries} left)`);
+            await sleep(waitSec * 1000);
+            resolve(graphql(query, variables, retries - 1));
+            return;
+          }
+          if (res.statusCode >= 400) {
+            reject(new Error(`GraphQL HTTP ${res.statusCode}: ${body.slice(0, 200)}`));
+            return;
+          }
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed.errors) {
+              reject(new Error(`GraphQL errors: ${JSON.stringify(parsed.errors).slice(0, 200)}`));
+              return;
+            }
+            resolve(parsed.data);
+          } catch (e) {
+            reject(new Error(`Invalid GraphQL JSON: ${e.message}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
 async function searchAll(query) {
   const items = [];
   let page = 1;
@@ -89,6 +138,10 @@ function mapPR(item) {
     comments: item.comments || 0,
     draft: item.draft || false,
     merged: item.pull_request?.merged_at != null,
+    labels: (item.labels || []).map((l) => ({
+      name: typeof l === "string" ? l : l.name,
+      color: typeof l === "string" ? "" : l.color || "",
+    })),
   };
 }
 
@@ -271,6 +324,54 @@ async function fetchActivity(pr) {
   return { last_push, activity, ...ci };
 }
 
+// Pure mapper: turns a GraphQL pullRequest node into flat triage signals.
+// Kept separate from the network call so it can be unit-tested.
+function mapSignals(prNode) {
+  if (!prNode) return { review_decision: "", mergeable: "", unresolved_threads: 0 };
+  const threads = prNode.reviewThreads?.nodes || [];
+  const unresolved = threads.filter((t) => t && t.isResolved === false).length;
+  return {
+    // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | null
+    review_decision: prNode.reviewDecision || "",
+    // MERGEABLE | CONFLICTING | UNKNOWN
+    mergeable: prNode.mergeable || "UNKNOWN",
+    unresolved_threads: unresolved,
+  };
+}
+
+const PR_SIGNALS_QUERY = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewDecision
+      mergeable
+      reviewThreads(first: 100) { nodes { isResolved } }
+    }
+  }
+}`;
+
+async function fetchPRSignals(pr) {
+  const [owner, name] = pr.url.replace("https://github.com/", "").split("/");
+  try {
+    const data = await graphql(PR_SIGNALS_QUERY, { owner, name, number: pr.number });
+    return mapSignals(data?.repository?.pullRequest);
+  } catch (e) {
+    console.warn(`  Failed to fetch signals for #${pr.number}: ${e.message}`);
+    return { review_decision: "", mergeable: "UNKNOWN", unresolved_threads: 0 };
+  }
+}
+
+async function enrichWithSignals(prs, label) {
+  if (prs.length === 0) return prs;
+  console.log(`\n  Fetching triage signals for ${prs.length} ${label} PRs...`);
+  const enriched = [];
+  for (const pr of prs) {
+    const signals = await fetchPRSignals(pr);
+    enriched.push({ ...pr, ...signals });
+  }
+  return enriched;
+}
+
 async function enrichWithActivity(prs, label) {
   if (prs.length === 0) return prs;
   console.log(`\n  Fetching activity for ${prs.length} ${label} PRs...`);
@@ -324,8 +425,13 @@ async function main() {
 
   // Enrich open PRs with activity (commits, reviews, comments)
   const toReviewEnriched = await enrichWithActivity(toReview, "to-review");
-  const openPrsEnriched = await enrichWithActivity(openPrs, "your-open");
-  const reviewedOpenEnriched = await enrichWithActivity(reviewedOpen, "reviewed-open");
+  let openPrsEnriched = await enrichWithActivity(openPrs, "your-open");
+  let reviewedOpenEnriched = await enrichWithActivity(reviewedOpen, "reviewed-open");
+
+  // Enrich the two "in-flight" lists with GraphQL triage signals
+  // (review decision, mergeable/conflict state, unresolved review threads).
+  openPrsEnriched = await enrichWithSignals(openPrsEnriched, "your-open");
+  reviewedOpenEnriched = await enrichWithSignals(reviewedOpenEnriched, "reviewed-open");
 
   const assignedSet = new Set(allAssignedIssueItems.map((i) => i.html_url));
   const authoredSet = new Set(allAuthoredIssueItems.map((i) => i.html_url));
@@ -378,7 +484,7 @@ async function main() {
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { mapPR, mapMention, mapComment, mapReview, mapCommit, mapReviewComment, fetchActivity, fetchCIStatus, request, searchAll, sleep };
+  module.exports = { mapPR, mapMention, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, fetchActivity, fetchCIStatus, fetchPRSignals, request, graphql, searchAll, sleep };
 }
 
 if (require.main === module) {

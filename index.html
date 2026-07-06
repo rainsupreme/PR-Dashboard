@@ -97,6 +97,14 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .badge-mention-pr { background: var(--color-accent-subtle); color: var(--color-accent-fg); }
 .badge-mention-issue { background: var(--color-done-subtle); color: var(--color-done-fg); }
 .badge-issue { background: var(--color-attention-subtle); color: var(--color-attention-fg); }
+.badge-ready { background: var(--color-success-subtle); color: var(--color-success-fg); }
+.badge-approved { background: var(--color-success-subtle); color: var(--color-success-fg); }
+.badge-ci-ok { background: var(--color-success-subtle); color: var(--color-success-fg); }
+.badge-changes { background: var(--color-danger-subtle); color: var(--color-danger-fg); }
+.badge-ci-fail { background: var(--color-danger-subtle); color: var(--color-danger-fg); }
+.badge-conflict { background: var(--color-attention-subtle); color: var(--color-attention-fg); }
+.badge-threads { background: var(--color-accent-subtle); color: var(--color-accent-fg); font-variant-numeric: tabular-nums; }
+.pr-merge-label { border: 1px solid var(--color-border-default); font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; }
 .move-btn { background: none; border: 1px solid var(--color-border-default); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--color-fg-muted); cursor: pointer; margin-left: auto; flex-shrink: 0; }
 .move-btn:hover { border-color: var(--color-accent-emphasis); color: var(--color-accent-fg); }
 .ci-dots { display: inline-flex; gap: 2px; align-items: center; flex-shrink: 0; margin-left: auto; }
@@ -214,6 +222,7 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
     </details>
     <span class="filter-label">Sort</span>
     <select class="filter-select" id="filter-review-sort">
+      <option value="triage" selected>Triage (needs action)</option>
       <option value="updated">Recently updated</option>
       <option value="created">Newest</option>
       <option value="comments">Most comments</option>
@@ -234,6 +243,7 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
     </details>
     <span class="filter-label">Sort</span>
     <select class="filter-select" id="filter-reviewed-open-sort">
+      <option value="triage" selected>Triage (needs action)</option>
       <option value="updated">Recently updated</option>
       <option value="created">Newest</option>
       <option value="comments">Most comments</option>
@@ -254,6 +264,7 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
     </details>
     <span class="filter-label">Sort</span>
     <select class="filter-select" id="filter-open-sort">
+      <option value="triage" selected>Triage (needs action)</option>
       <option value="updated">Recently updated</option>
       <option value="created">Newest</option>
       <option value="comments">Most comments</option>
