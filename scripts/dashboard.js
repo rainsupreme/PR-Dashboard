@@ -194,9 +194,8 @@ function renderPR(pr, type, moveBtn) {
     } else {
       if (pr.review_decision === "APPROVED") parts.push(`<span class="pr-badge badge-approved">✓ approved</span>`);
       else if (pr.review_decision === "CHANGES_REQUESTED") parts.push(`<span class="pr-badge badge-changes">✗ changes requested</span>`);
-      const ci = ciState(pr);
-      if (ci === "failure") parts.push(`<span class="pr-badge badge-ci-fail">✗ CI failing</span>`);
-      else if (ci === "success") parts.push(`<span class="pr-badge badge-ci-ok">✓ green</span>`);
+      // Green is already conveyed by the CI dots — only chip CI when it's failing.
+      if (ciState(pr) === "failure") parts.push(`<span class="pr-badge badge-ci-fail">✗ CI failing</span>`);
       if (pr.mergeable === "CONFLICTING") parts.push(`<span class="pr-badge badge-conflict">⚠ conflicts</span>`);
     }
     if ((pr.unresolved_threads || 0) > 0) {
@@ -215,7 +214,7 @@ function renderPR(pr, type, moveBtn) {
     }
   });
 
-  const actionable = isActionable(pr, { mergeLabels: DASHBOARD_MERGE_LABELS });
+  const actionable = isActionable(pr, { mergeLabels: DASHBOARD_MERGE_LABELS, type });
   const itemClass = (hasActivity && !hasUnread && !actionable) ? "pr-item pr-quiet" : "pr-item";
 
   return `<div class="${itemClass}">
@@ -408,7 +407,7 @@ Promise.all([
             const btn = isManual
               ? `<button class="move-btn" data-url="${escapeAttr(pr.url)}" data-action="undo-reviewed">↩ Undo</button>`
               : "";
-            return renderPR(pr, "open", btn);
+            return renderPR(pr, "reviewed-open", btn);
           }).join("")
         : `<div class="loading">No PRs match the filter</div>`;
       document.getElementById("section-count-reviewed-open").textContent = `${filtered.length} open`;

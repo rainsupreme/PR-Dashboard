@@ -1,7 +1,7 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  ciState, hasMergeLabel, isClearToLand, isActionable, computeTriageScore, sortPRs,
+  ciState, hasMergeLabel, isClearToLand, isBroken, isActionable, computeTriageScore, sortPRs,
 } = require("../scripts/utils.js");
 const { mapSignals, mapPR } = require("../scripts/fetch-prs.js");
 
@@ -130,9 +130,8 @@ describe("computeTriageScore tiers", () => {
     const ready = computeTriageScore(pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") }), o("open"));
     assert.ok(ciFail > changes && changes > conflict && conflict > threads && threads > ready);
   });
-  it("stale review request scores on the review tab only", () => {
+  it("authored ladder ignores staleness (that's a review-tab concept)", () => {
     const old = pr({ created: "2000-01-01T00:00:00Z" });
-    assert.equal(computeTriageScore(old, o("review")), 40);
     assert.equal(computeTriageScore(old, o("open")), 0);
   });
   it("queued + healthy sinks to the bottom", () => {
@@ -156,5 +155,136 @@ describe("sortPRs triage mode", () => {
   it("still supports chronological modes", () => {
     const list = [pr({ number: 1, updated: "2024-01-01T00:00:00Z" }), pr({ number: 2, updated: "2024-02-01T00:00:00Z" })];
     assert.deepEqual(sortPRs(list, "updated").map(p => p.number), [2, 1]);
+  });
+});
+
+describe("incoming review scoring (review tab, ready-first)", () => {
+  const o = { mergeLabels: MERGE, type: "review" };
+  it("green/clean outranks broken", () => {
+    assert.ok(
+      computeTriageScore(pr({ ci_jobs: jobs("success") }), o) >
+      computeTriageScore(pr({ ci_jobs: jobs("failure") }), o)
+    );
+  });
+  it("a long wait on you bumps above a fresh green PR", () => {
+    const fresh = computeTriageScore(pr({ ci_jobs: jobs("success"), created: new Date().toISOString() }), o);
+    const stale = computeTriageScore(pr({ ci_jobs: jobs("success"), created: "2000-01-01T00:00:00Z" }), o);
+    assert.ok(stale > fresh);
+  });
+  it("green+stale tops broken+stale", () => {
+    const g = computeTriageScore(pr({ ci_jobs: jobs("success"), created: "2000-01-01T00:00:00Z" }), o);
+    const b = computeTriageScore(pr({ ci_jobs: jobs("failure"), created: "2000-01-01T00:00:00Z" }), o);
+    assert.ok(g > b);
+  });
+});
+
+describe("outgoing review scoring (reviewed-open tab, ready-to-merge-first)", () => {
+  const o = { mergeLabels: MERGE, type: "reviewed-open" };
+  const ready = pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") });
+  it("ready + unqueued (nudge a committer) is highest", () => {
+    assert.equal(computeTriageScore(ready, o), 80);
+  });
+  it("orders nudge > broken > queued-healthy", () => {
+    const broken = computeTriageScore(pr({ review_decision: "CHANGES_REQUESTED", ci_jobs: jobs("success") }), o);
+    const queued = computeTriageScore(pr({ ...ready, labels: [{ name: "to_be_merged" }] }), o);
+    assert.ok(computeTriageScore(ready, o) > broken && broken > queued);
+  });
+});
+
+describe("per-tab isActionable", () => {
+  it("review tab: green actionable, CI-failing not", () => {
+    assert.equal(isActionable(pr({ ci_jobs: jobs("success") }), { type: "review", mergeLabels: MERGE }), true);
+    assert.equal(isActionable(pr({ ci_jobs: jobs("failure") }), { type: "review", mergeLabels: MERGE }), false);
+  });
+  it("reviewed-open: ready-unqueued & threads actionable; queued/broken not", () => {
+    const o = { type: "reviewed-open", mergeLabels: MERGE };
+    assert.equal(isActionable(pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") }), o), true);
+    assert.equal(isActionable(pr({ unresolved_threads: 1 }), o), true);
+    assert.equal(isActionable(pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success"), labels: [{ name: "to_be_merged" }] }), o), false);
+    assert.equal(isActionable(pr({ ci_jobs: jobs("failure") }), o), false);
+  });
+});
+
+// (1) sortPRs("triage") end-to-end for the review + reviewed-open tabs
+describe("sortPRs triage — review tab (ready-first)", () => {
+  const o = { type: "review", mergeLabels: MERGE };
+  it("orders green+stale > green+fresh > CI-failing", () => {
+    const list = [
+      pr({ number: 1, ci_jobs: jobs("failure"), created: new Date().toISOString() }),   // 20
+      pr({ number: 2, ci_jobs: jobs("success"), created: new Date().toISOString() }),   // 60
+      pr({ number: 3, ci_jobs: jobs("success"), created: "2000-01-01T00:00:00Z" }),      // 85
+    ];
+    assert.deepEqual(sortPRs(list, "triage", o).map(p => p.number), [3, 2, 1]);
+  });
+});
+
+describe("sortPRs triage — reviewed-open tab (nudge-first)", () => {
+  const o = { type: "reviewed-open", mergeLabels: MERGE };
+  it("orders nudge > broken > queued-healthy", () => {
+    const ready = { review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") };
+    const list = [
+      pr({ number: 1, ...ready, labels: [{ name: "to_be_merged" }] }),      // 5 queued-healthy
+      pr({ number: 2, review_decision: "CHANGES_REQUESTED", ci_jobs: jobs("success") }), // 15 broken
+      pr({ number: 3, ...ready }),                                            // 80 nudge
+    ];
+    assert.deepEqual(sortPRs(list, "triage", o).map(p => p.number), [3, 2, 1]);
+  });
+});
+
+// (2) Pending CI: not ready, not broken, and scored the same as green on review
+describe("pending CI semantics", () => {
+  const p = pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("pending") });
+  it("ciState reports pending", () => {
+    assert.equal(ciState(p), "pending");
+  });
+  it("pending is neither clear-to-land nor broken", () => {
+    assert.equal(isClearToLand(p), false); // needs success, not pending
+    assert.equal(isBroken(p), false);      // pending is not a failure
+  });
+  it("review tab scores pending same as green (not failing)", () => {
+    const pending = computeTriageScore(pr({ ci_jobs: jobs("pending"), created: new Date().toISOString() }), { type: "review" });
+    const green = computeTriageScore(pr({ ci_jobs: jobs("success"), created: new Date().toISOString() }), { type: "review" });
+    assert.equal(pending, green);
+    assert.equal(pending, 60);
+  });
+  it("authored tab scores a pending-only PR as baseline", () => {
+    assert.equal(computeTriageScore(pr({ ci_jobs: jobs("pending") }), { type: "open", mergeLabels: MERGE }), 0);
+  });
+});
+
+// (3) Explicit assertions for the outgoing 60 (nearly-ready) and 40 (threads) tiers
+describe("outgoing review scoring — nearly-ready and threads tiers", () => {
+  const o = { type: "reviewed-open", mergeLabels: MERGE };
+  it("approved + green + mergeable UNKNOWN scores 60 (nearly ready)", () => {
+    assert.equal(computeTriageScore(pr({ review_decision: "APPROVED", mergeable: "UNKNOWN", ci_jobs: jobs("success") }), o), 60);
+  });
+  it("unresolved threads (not broken/approved/labelled) scores 40", () => {
+    assert.equal(computeTriageScore(pr({ review_decision: "REVIEW_REQUIRED", ci_jobs: jobs("success"), unresolved_threads: 2 }), o), 40);
+  });
+});
+
+// (4) mapPR handles string-form labels (GitHub returns either shape)
+describe("mapPR string-form labels", () => {
+  const base = {
+    title: "t", number: 1,
+    repository_url: "https://api.github.com/repos/valkey-io/valkey",
+    html_url: "https://github.com/valkey-io/valkey/pull/1",
+    user: { login: "x", avatar_url: "" },
+    created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z",
+  };
+  it("normalizes string labels to {name,color:''}", () => {
+    assert.deepEqual(mapPR({ ...base, labels: ["to_be_merged"] }).labels, [{ name: "to_be_merged", color: "" }]);
+  });
+});
+
+// (5) daysOld > 7 boundary in the review-tab stale bump
+describe("review stale bump boundary (strict > 7)", () => {
+  const o = { type: "review" };
+  const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
+  it("exactly 7 days => no bump (60)", () => {
+    assert.equal(computeTriageScore(pr({ ci_jobs: jobs("success"), created: daysAgo(7) }), o), 60);
+  });
+  it("8 days => bump (85)", () => {
+    assert.equal(computeTriageScore(pr({ ci_jobs: jobs("success"), created: daysAgo(8) }), o), 85);
   });
 });

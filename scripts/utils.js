@@ -72,41 +72,85 @@ function isClearToLand(pr) {
   );
 }
 
-// Whether a PR has something the user can act on. Used to keep items bright
-// (undimmed) even when there is no *new* activity.
+// A PR is "broken" when it has a problem its author must fix. On the review
+// tab only CI is known (those PRs aren't GraphQL-enriched), so this degrades
+// to CI-only there.
+function isBroken(pr) {
+  return (
+    ciState(pr) === "failure" ||
+    pr.mergeable === "CONFLICTING" ||
+    pr.review_decision === "CHANGES_REQUESTED"
+  );
+}
+
+// Whether a PR needs the user's attention now — keeps it bright (undimmed)
+// even with no new activity. Semantics differ by tab because the *action*
+// differs: on your own PRs the ball is on you (broken = act); on PRs you're
+// reviewing the ball is on the author (ready/green = act).
 function isActionable(pr, opts) {
-  const { mergeLabels } = opts || {};
+  const { mergeLabels, type } = opts || {};
+  if (type === "review") {
+    // Incoming review: your review is the last mile unless it's broken.
+    return ciState(pr) !== "failure";
+  }
+  if (type === "reviewed-open") {
+    // Ready to nudge a committer, or a thread awaiting your re-review.
+    if (isClearToLand(pr) && !hasMergeLabel(pr, mergeLabels)) return true;
+    if ((pr.unresolved_threads || 0) > 0) return true;
+    return false;
+  }
+  // Authored ("open"): broken-first — the more broken, the more it needs you.
   if (ciState(pr) === "failure") return true;
   if (pr.review_decision === "CHANGES_REQUESTED") return true;
   if (pr.mergeable === "CONFLICTING") return true;
   if ((pr.unresolved_threads || 0) > 0) return true;
-  // Mechanically ready but NOT yet queued by a maintainer -> your nudge action.
   if (isClearToLand(pr) && !hasMergeLabel(pr, mergeLabels)) return true;
   return false;
 }
 
-// Triage priority (higher = more urgent). Tiers:
-//   queued-but-broken  > CI failing > changes requested > conflict
-//   > unresolved threads > ready-to-nudge > stale review > unread > baseline
-// A healthy PR already queued by a maintainer sinks to the bottom ("just wait").
+// Triage priority (higher = more urgent), ranked per-tab.
 function computeTriageScore(pr, opts) {
   const { mergeLabels, type } = opts || {};
+  if (type === "review") return scoreIncomingReview(pr);
+  if (type === "reviewed-open") return scoreOutgoingReview(pr, mergeLabels);
+  return scoreAuthored(pr, mergeLabels);
+}
+
+// Your own PRs — broken-first. The more broken, the more of your work remains.
+function scoreAuthored(pr, mergeLabels) {
   const labeled = hasMergeLabel(pr, mergeLabels);
   const ci = ciState(pr);
   const broken = ci === "failure" || pr.mergeable === "CONFLICTING";
-
-  // Queued by a maintainer but now broken -> most urgent.
-  if (labeled && broken) return 100;
+  if (labeled && broken) return 100;              // queued for merge but now broken
   if (ci === "failure") return 90;
   if (pr.review_decision === "CHANGES_REQUESTED") return 80;
   if (pr.mergeable === "CONFLICTING") return 70;
   if ((pr.unresolved_threads || 0) > 0) return 60;
-  // Ready to land but not yet queued -> nudge a maintainer.
-  if (isClearToLand(pr) && !labeled) return 50;
-  // Stale review request (only meaningful on the review tab).
-  if (type === "review" && daysOld(pr.created) > 7) return 40;
-  // Queued and healthy -> just wait, lowest actionable relevance.
-  if (labeled) return 5;
+  if (isClearToLand(pr) && !labeled) return 50;   // ready -> nudge a maintainer
+  if (labeled) return 5;                          // queued + healthy -> just wait
+  return 0;
+}
+
+// PRs awaiting your review — ready/green-first: your review unblocks merge,
+// so the closer to mergeable the higher; a long wait on you bumps it further.
+// CI-only + staleness (these PRs are not GraphQL-enriched).
+function scoreIncomingReview(pr) {
+  let score = ciState(pr) === "failure" ? 20 : 60; // broken = author's turn, can wait
+  if (daysOld(pr.created) > 7) score += 25;        // been waiting on you a long time
+  return score;
+}
+
+// PRs you reviewed — ready-to-merge-first: the closer to landing, the more
+// valuable your nudge. Broken PRs are the author's move; already-queued
+// healthy PRs just wait.
+function scoreOutgoingReview(pr, mergeLabels) {
+  const labeled = hasMergeLabel(pr, mergeLabels);
+  const ci = ciState(pr);
+  if (isBroken(pr)) return 15;                      // ball back with the author
+  if (labeled) return 5;                            // queued + healthy -> just waiting
+  if (isClearToLand(pr)) return 80;                 // ready + unqueued -> nudge a committer
+  if (pr.review_decision === "APPROVED" && ci === "success") return 60; // nearly ready
+  if ((pr.unresolved_threads || 0) > 0) return 40;  // may need your re-review
   return 0;
 }
 
@@ -117,5 +161,5 @@ function filterUnreadActivity(activity, since) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, isClearToLand, isActionable, computeTriageScore };
+  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, isClearToLand, isBroken, isActionable, computeTriageScore };
 }
