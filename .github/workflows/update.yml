@@ -7,7 +7,7 @@ on:
       - "config.json"
       - "README.md"
   schedule:
-    - cron: "0 * * * *" # Every hour
+    - cron: "17 * * * *" # Hourly at :17 (off-peak; :00 is congested and gets delayed/dropped)
   workflow_dispatch:
 
 permissions:
