@@ -345,6 +345,20 @@ Promise.all([
     const updatedLabel = data.updated ? `Updated ${formatDate(data.updated)}` : "Run the workflow to populate data";
     document.getElementById("subtitle").textContent = `${userLabel}${updatedLabel}`;
 
+    // Stale-data banner: the page renders a pre-built data/prs.json, so if the
+    // refresh workflow stalls the site silently shows old data. Warn past 90 min.
+    const STALE_MS = 90 * 60 * 1000;
+    if (isStale(data.updated, STALE_MS)) {
+      const banner = document.getElementById("stale-banner");
+      const age = staleAgeLabel(Date.now() - new Date(data.updated).getTime());
+      document.getElementById("stale-banner-text").textContent =
+        `⚠ Data is ${age} old (updated ${formatDate(data.updated)}) — the refresh workflow may have stopped.`;
+      banner.style.display = "";
+      document.getElementById("stale-banner-close").addEventListener("click", () => {
+        banner.style.display = "none";
+      });
+    }
+
     const staleOverrides = getOverrides();
     const reviewUrls = new Set(data.to_review.map(pr => pr.url));
     Object.keys(staleOverrides).forEach(url => {

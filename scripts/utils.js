@@ -160,6 +160,22 @@ function filterUnreadActivity(activity, since) {
   return activity.filter(a => a.created_at > since);
 }
 
+// True when the data's updated timestamp is older than thresholdMs.
+// Missing/invalid timestamps are treated as NOT stale (nothing to warn about).
+function isStale(updatedIso, thresholdMs, now) {
+  if (!updatedIso) return false;
+  const t = new Date(updatedIso).getTime();
+  if (isNaN(t)) return false;
+  return (now || Date.now()) - t > thresholdMs;
+}
+
+// Compact human age for the stale banner (e.g. "2h", "3d").
+function staleAgeLabel(ms) {
+  const hours = ms / 3600000;
+  if (hours < 24) return `${Math.floor(hours)}h`;
+  return `${Math.floor(ms / 86400000)}d`;
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, isClearToLand, isBroken, isActionable, computeTriageScore };
+  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, isClearToLand, isBroken, isActionable, computeTriageScore, isStale, staleAgeLabel };
 }

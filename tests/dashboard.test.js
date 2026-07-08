@@ -1,6 +1,6 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity } = require("../scripts/utils.js");
+const { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, isStale, staleAgeLabel } = require("../scripts/utils.js");
 
 describe("timeAgo", () => {
   it("returns empty string for falsy input", () => {
@@ -155,5 +155,38 @@ describe("filterUnreadActivity", () => {
     const result = filterUnreadActivity(activity, "2024-06-05T10:00:00Z");
     assert.equal(result.length, 1);
     assert.equal(result[0].body, "new");
+  });
+});
+
+describe("isStale", () => {
+  const now = new Date("2026-07-08T00:00:00Z").getTime();
+  const THRESH = 90 * 60 * 1000;
+  it("false for missing/invalid timestamps", () => {
+    assert.equal(isStale("", THRESH, now), false);
+    assert.equal(isStale(null, THRESH, now), false);
+    assert.equal(isStale("not-a-date", THRESH, now), false);
+  });
+  it("false when fresher than the threshold", () => {
+    const t = new Date(now - 60 * 60 * 1000).toISOString(); // 60 min
+    assert.equal(isStale(t, THRESH, now), false);
+  });
+  it("true when older than the threshold", () => {
+    const t = new Date(now - 120 * 60 * 1000).toISOString(); // 120 min
+    assert.equal(isStale(t, THRESH, now), true);
+  });
+  it("boundary: exactly at threshold is not stale (strict >)", () => {
+    const t = new Date(now - THRESH).toISOString();
+    assert.equal(isStale(t, THRESH, now), false);
+  });
+});
+
+describe("staleAgeLabel", () => {
+  it("formats hours under a day", () => {
+    assert.equal(staleAgeLabel(90 * 60 * 1000), "1h");
+    assert.equal(staleAgeLabel(5 * 3600000), "5h");
+  });
+  it("formats days at/over 24h", () => {
+    assert.equal(staleAgeLabel(26 * 3600000), "1d");
+    assert.equal(staleAgeLabel(3 * 86400000), "3d");
   });
 });
