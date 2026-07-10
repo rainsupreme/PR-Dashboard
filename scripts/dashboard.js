@@ -111,6 +111,41 @@ function renderActivityItem(item, isUnread) {
   </div>`;
 }
 
+// Shared activity/unread block for PRs and issues. Issues have only comments
+// (no commits), so the lastCommit branch is simply skipped for them.
+function buildActivity(item, type) {
+  const hasActivity = item.activity && item.activity.length > 0 && type !== "closed";
+  if (!hasActivity) return { hasActivity: false, hasUnread: false, unreadBadge: "", activitySection: "", toggleBtn: "" };
+
+  const actId = `activity-${item.repo}-${item.number}`;
+  const lastCommit = item.activity.find(a => a.type === "commit");
+  const since = item.last_push || (lastCommit ? lastCommit.created_at : item.created);
+  const afterPush = item.activity.filter(a => a.type !== "commit" && a.created_at > since);
+
+  const unread = getUnreadActivity(item, DASHBOARD_USER).filter(a => a.type !== "commit");
+  const hasUnread = unread.length > 0;
+  const unreadBadge = hasUnread ? `<span class="pr-badge badge-unread">${unread.length} new</span>` : "";
+
+  const visibleItems = [];
+  if (lastCommit) visibleItems.push(lastCommit);
+  afterPush.forEach(a => visibleItems.push(a));
+  const displayItems = visibleItems.length > 1 ? visibleItems.slice(0, 10) : item.activity.slice(0, 5);
+
+  let activitySection = "";
+  if (displayItems.length > 0) {
+    const items = displayItems.map(a =>
+      renderActivityItem(a, unread.some(u => u.created_at === a.created_at))
+    ).join("");
+    activitySection = `
+        <div class="activity-section" id="${actId}">
+          ${items}
+          <button class="mark-read-btn" data-url="${escapeAttr(item.url)}" data-target="${actId}">✓ Mark read</button>
+        </div>`;
+  }
+  const toggleBtn = `<button class="activity-toggle" data-target="${actId}">▸ activity</button>`;
+  return { hasActivity: true, hasUnread, unreadBadge, activitySection, toggleBtn };
+}
+
 function renderPR(pr, type, moveBtn) {
   let badge = "";
   if (type === "closed") {
@@ -126,53 +161,7 @@ function renderPR(pr, type, moveBtn) {
   const authorLine = type === "review" ? `<span>@${escapeHtml(pr.author)}</span>` : "";
   const moveBtnHtml = moveBtn || "";
 
-  const hasActivity = pr.activity && pr.activity.length > 0 && type !== "closed";
-  let unreadBadge = "";
-  let activitySection = "";
-  let hasUnread = false;
-
-  if (hasActivity) {
-    const actId = `activity-${pr.repo}-${pr.number}`;
-
-    // Find the most recent commit (= last push anchor)
-    const lastCommit = pr.activity.find(a => a.type === "commit");
-    const since = pr.last_push || (lastCommit ? lastCommit.created_at : pr.created);
-
-    // Activity after last push (reviews + comments, not commits)
-    const afterPush = pr.activity
-      .filter(a => a.type !== "commit" && a.created_at > since);
-
-    // Unread count uses read marker if available, else last_push
-    const unread = getUnreadActivity(pr, DASHBOARD_USER).filter(a => a.type !== "commit");
-    hasUnread = unread.length > 0;
-    unreadBadge = hasUnread
-      ? `<span class="pr-badge badge-unread">${unread.length} new</span>`
-      : "";
-
-    // Build visible list: last commit + non-commit activity after it
-    const visibleItems = [];
-    if (lastCommit) visibleItems.push(lastCommit);
-    afterPush.forEach(a => visibleItems.push(a));
-
-    // Fallback: if nothing after push, show last 5 items
-    const displayItems = visibleItems.length > 1 ? visibleItems.slice(0, 10)
-      : pr.activity.slice(0, 5);
-
-    if (displayItems.length > 0) {
-      const items = displayItems.map(a =>
-        renderActivityItem(a, unread.some(u => u.created_at === a.created_at))
-      ).join("");
-      activitySection = `
-        <div class="activity-section" id="${actId}">
-          ${items}
-          <button class="mark-read-btn" data-url="${escapeAttr(pr.url)}" data-target="${actId}">✓ Mark read</button>
-        </div>`;
-    }
-  }
-
-  const toggleBtn = hasActivity
-    ? `<button class="activity-toggle" data-target="activity-${pr.repo}-${pr.number}">▸ activity</button>`
-    : "";
+  const { hasActivity, hasUnread, unreadBadge, activitySection, toggleBtn } = buildActivity(pr, type);
 
   // CI status dots (one per job, only for unmerged PRs). Failures first so that
   // if the rail clips under space pressure, the important ones stay visible.
@@ -267,19 +256,23 @@ function renderMention(item) {
 }
 
 function renderIssue(item) {
-  return `<div class="pr-item">
+  const { hasActivity, hasUnread, unreadBadge, activitySection, toggleBtn } = buildActivity(item, "issue");
+  const itemClass = (hasActivity && !hasUnread) ? "pr-item pr-quiet" : "pr-item";
+  return `<div class="${itemClass}">
     <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
         <span class="pr-number">#${item.number}</span>
-        <span class="pr-badge badge-issue">Issue</span>
+        <span class="pr-badge badge-issue">Issue</span>${unreadBadge}
       </div>
       <div class="pr-meta">
         <span class="pr-repo">${escapeHtml(item.repo)}</span>
         <span>@${escapeHtml(item.author)}</span>
         <span>updated ${timeAgo(item.updated)}</span>
+        ${toggleBtn}
       </div>
+      ${activitySection}
     </div>
   </div>`;
 }
@@ -366,7 +359,7 @@ Promise.all([
     });
 
     // Prune read markers for PRs no longer in any open list
-    const allOpenUrls = new Set([...data.to_review, ...data.open_prs, ...(data.reviewed_open || [])].map(pr => pr.url));
+    const allOpenUrls = new Set([...data.to_review, ...data.open_prs, ...(data.reviewed_open || []), ...(data.issues || [])].map(pr => pr.url));
     const staleMarkers = getReadMarkers();
     Object.keys(staleMarkers).forEach(url => {
       if (!allOpenUrls.has(url)) { delete staleMarkers[url]; }
@@ -576,7 +569,7 @@ Promise.all([
       if (markBtn) {
         e.stopPropagation();
         setReadMarker(markBtn.dataset.url);
-        renderReview(); renderReviewedOpen(); renderOpen();
+        renderReview(); renderReviewedOpen(); renderOpen(); renderIssues();
         return;
       }
     });

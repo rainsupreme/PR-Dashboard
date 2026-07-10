@@ -324,6 +324,36 @@ async function fetchActivity(pr) {
   return { last_push, activity, ...ci };
 }
 
+// Issues have only comments (no commits/reviews/CI). Fetch them, build a
+// comment activity list, and anchor unread on your most recent comment.
+async function fetchIssueActivity(issue) {
+  const [org, repo] = issue.url.replace("https://github.com/", "").split("/");
+  const base = `https://api.github.com/repos/${org}/${repo}`;
+  let comments = [];
+  try {
+    const { body } = await request(`${base}/issues/${issue.number}/comments?per_page=100`);
+    comments = body;
+  } catch (e) { console.warn(`  Failed to fetch comments for issue #${issue.number}: ${e.message}`); }
+
+  const activity = comments.map(mapComment).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  // Anchor: your latest comment on the issue -> unread = comments after it.
+  // Falls back to issue creation (handled downstream) when you've never replied.
+  const myEvents = activity.filter(a => a.author === GITHUB_USER);
+  const my_last_interaction = myEvents.length > 0 ? myEvents[0].created_at : "";
+  return { activity, my_last_interaction, last_push: my_last_interaction };
+}
+
+async function enrichIssuesWithActivity(issues, label) {
+  if (issues.length === 0) return issues;
+  console.log(`\n  Fetching comments for ${issues.length} ${label}...`);
+  const enriched = [];
+  for (const issue of issues) {
+    const { activity, my_last_interaction, last_push } = await fetchIssueActivity(issue);
+    enriched.push({ ...issue, activity, my_last_interaction, last_push });
+  }
+  return enriched;
+}
+
 // Pure mapper: turns a GraphQL pullRequest node into flat triage signals.
 // Kept separate from the network call so it can be unit-tested.
 function mapSignals(prNode) {
@@ -450,6 +480,9 @@ async function main() {
       return m;
     });
 
+  // Enrich issues with comment activity (PR-style unread/inline threads).
+  const issuesEnriched = await enrichIssuesWithActivity(issues, "issues");
+
   const data = {
     github_user: GITHUB_USER,
     orgs: ORGS,
@@ -460,7 +493,7 @@ async function main() {
     reviewed_open: reviewedOpenEnriched,
     reviewed_by: reviewedBy,
     mentions,
-    issues,
+    issues: issuesEnriched,
     counts: {
       to_review: toReviewEnriched.length,
       open: openPrsEnriched.length,
@@ -468,7 +501,7 @@ async function main() {
       reviewed_open: reviewedOpenEnriched.length,
       reviewed_by: reviewedBy.length,
       mentions: mentions.length,
-      issues: issues.length,
+      issues: issuesEnriched.length,
     },
   };
 
@@ -484,7 +517,7 @@ async function main() {
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { mapPR, mapMention, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, fetchActivity, fetchCIStatus, fetchPRSignals, request, graphql, searchAll, sleep };
+  module.exports = { mapPR, mapMention, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep };
 }
 
 if (require.main === module) {
