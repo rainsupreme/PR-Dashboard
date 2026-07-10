@@ -104,3 +104,41 @@ describe("fetchCIStatus", () => {
     assert.deepEqual(result, { ci_jobs: [] });
   });
 });
+
+describe("issue unread anchor (comments after your last reply)", () => {
+  const comments = [
+    { created_at: "2026-06-28T10:00:00Z", type: "comment", author: "alice" },
+    { created_at: "2026-07-01T09:00:00Z", type: "comment", author: "rainsupreme" }, // my last reply
+    { created_at: "2026-07-03T12:00:00Z", type: "comment", author: "bob" },         // after -> unread
+  ];
+
+  it("assigned issue (someone else authored): unread = comments after my last reply", () => {
+    const issue = { url: "https://x/1", author: "alice", created: "2026-06-01T00:00:00Z",
+      my_last_interaction: "2026-07-01T09:00:00Z", last_push: "2026-07-01T09:00:00Z", activity: comments };
+    const unread = getUnreadActivity(issue, "rainsupreme");
+    assert.equal(unread.length, 1);
+    assert.equal(unread[0].author, "bob");
+  });
+
+  it("issue I authored: anchor still my last reply (via last_push)", () => {
+    const issue = { url: "https://x/2", author: "rainsupreme", created: "2026-06-01T00:00:00Z",
+      my_last_interaction: "2026-07-01T09:00:00Z", last_push: "2026-07-01T09:00:00Z", activity: comments };
+    const unread = getUnreadActivity(issue, "rainsupreme");
+    assert.equal(unread.length, 1);
+    assert.equal(unread[0].author, "bob");
+  });
+
+  it("never replied: anchors to issue creation, all later comments unread", () => {
+    const issue = { url: "https://x/3", author: "alice", created: "2026-06-20T00:00:00Z",
+      my_last_interaction: "", last_push: "", activity: [{ created_at: "2026-06-25T00:00:00Z", type: "comment", author: "carol" }] };
+    const unread = getUnreadActivity(issue, "rainsupreme");
+    assert.equal(unread.length, 1);
+  });
+
+  it("read marker overrides the reply anchor", () => {
+    const issue = { url: "https://x/4", author: "alice", created: "2026-06-01T00:00:00Z",
+      my_last_interaction: "2026-07-01T09:00:00Z", last_push: "2026-07-01T09:00:00Z", activity: comments };
+    const unread = getUnreadActivity(issue, "rainsupreme", { "https://x/4": "2026-07-04T00:00:00Z" });
+    assert.equal(unread.length, 0); // nothing after the marker
+  });
+});
