@@ -211,10 +211,10 @@ function renderPR(pr, type, moveBtn) {
 
   return `<div class="${itemClass}">
     <img class="pr-avatar" src="${escapeAttr(pr.avatar)}" alt="" loading="lazy">
+    <span class="pr-number"><span class="hash">#</span>${pr.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(pr.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(pr.title)}</a>
-        <span class="pr-number">#${pr.number}</span>
         ${badge}${staleBadge}${mergeLabelBadges}${signalBadges}${unreadBadge}
         ${moveBtnHtml}
       </div>
@@ -240,10 +240,10 @@ function renderMention(item) {
 
   return `<div class="pr-item">
     <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
+    <span class="pr-number"><span class="hash">#</span>${item.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
-        <span class="pr-number">#${item.number}</span>
         ${typeBadge}${staleBadge}
       </div>
       <div class="pr-meta">
@@ -260,10 +260,10 @@ function renderIssue(item) {
   const itemClass = (hasActivity && !hasUnread) ? "pr-item pr-quiet" : "pr-item";
   return `<div class="${itemClass}">
     <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
+    <span class="pr-number"><span class="hash">#</span>${item.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
-        <span class="pr-number">#${item.number}</span>
         <span class="pr-badge badge-issue">Issue</span>${unreadBadge}
       </div>
       <div class="pr-meta">
