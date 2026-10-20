@@ -44,6 +44,16 @@ GitHub Search API (authenticated via `GITHUB_TOKEN` in Actions), per org:
 
 All queries are paginated (up to 1000 results per query).
 
+In-flight PRs (to-review, your open, reviewed-open) are then enriched per PR:
+REST for commits / reviews / comments / check-runs (activity feed + CI dots), and
+one GraphQL query (`PR_SIGNALS_QUERY`) for `headRefOid`, per-review commit oids,
+review requests, each unresolved thread's opener and last commenter, and the
+status-check rollup. `mapSignals()` in `scripts/fetch-prs.js` turns that into
+flat turn-aware fields (`waiting_on`, `approvals_current`, `approvals_stale`,
+`changes_requested`, `threads_awaiting_me`, `my_review`, `my_review_stale`,
+`my_last_look`, ...); `whoseMove()` in `scripts/utils.js` ranks them per tab.
+GitHub's `reviewDecision` is kept for display only: it is sticky across pushes.
+
 ## Setup
 
 1. Push this repo to GitHub

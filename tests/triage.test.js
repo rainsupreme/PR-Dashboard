@@ -1,40 +1,169 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  ciState, hasMergeLabel, isClearToLand, isBroken, isActionable, computeTriageScore, sortPRs,
+  ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, sortPRs,
 } = require("../scripts/utils.js");
 const { mapSignals, mapPR } = require("../scripts/fetch-prs.js");
 
-const MERGE = ["to_be_merged"];
+const MERGE = ["to-be-merged"];
+const ME = "rainsupreme";
 
 // Helpers to build PR fixtures
 const pr = (o = {}) => ({
   url: "https://github.com/valkey-io/valkey/pull/1",
   number: 1,
+  author: "someone",
   updated: "2024-01-01T00:00:00Z",
   created: "2024-01-01T00:00:00Z",
   ci_jobs: [],
   labels: [],
+  waiting_on: [],
+  has_human_reviewer: true,
   ...o,
 });
 const jobs = (...statuses) => statuses.map((s, i) => ({ name: `job${i}`, status: s, url: "" }));
+const user = (login) => ({ login, __typename: "User" });
+const bot = (login) => ({ login, __typename: "Bot" });
+const review = (login, state, oid, at = "2024-01-01T00:00:00Z") => ({ author: user(login), state, submittedAt: at, commit: { oid } });
+const thread = (opener, latest, resolved = false) => ({
+  isResolved: resolved,
+  opener: { nodes: [{ author: opener }] },
+  latest: { nodes: [{ author: latest }] },
+});
+const node = (o = {}) => ({
+  reviewDecision: "REVIEW_REQUIRED",
+  mergeable: "MERGEABLE",
+  headRefOid: "head",
+  author: user("author"),
+  reviewRequests: { nodes: [] },
+  reviews: { nodes: [] },
+  reviewThreads: { nodes: [] },
+  commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] },
+  ...o,
+});
+const requests = (...logins) => ({ nodes: logins.map((l) => ({ requestedReviewer: l.startsWith("team:") ? { __typename: "Team", slug: l.slice(5) } : { __typename: "User", login: l } })) });
 
-describe("mapSignals", () => {
-  it("maps a full node", () => {
-    const s = mapSignals({
-      reviewDecision: "APPROVED",
-      mergeable: "MERGEABLE",
-      reviewThreads: { nodes: [{ isResolved: true }, { isResolved: false }, { isResolved: false }] },
-    });
+describe("mapSignals: verdicts against the head", () => {
+  it("an approval on the current head counts; GitHub's sticky reviewDecision is display-only", () => {
+    const s = mapSignals(node({ reviewDecision: "APPROVED", reviews: { nodes: [review("alice", "APPROVED", "head")] } }), ME);
+    assert.equal(s.approvals_current, 1);
+    assert.equal(s.approvals_stale, 0);
+    assert.deepEqual(s.waiting_on, []);
     assert.equal(s.review_decision, "APPROVED");
-    assert.equal(s.mergeable, "MERGEABLE");
-    assert.equal(s.unresolved_threads, 2);
   });
+  it("an approval on an older head is stale and puts the reviewer back in waiting_on (PR 4107 / 4490)", () => {
+    const s = mapSignals(node({ reviewDecision: "APPROVED", reviews: { nodes: [review("zhulipeng", "APPROVED", "old")] } }), ME);
+    assert.equal(s.approvals_current, 0);
+    assert.equal(s.approvals_stale, 1);
+    assert.deepEqual(s.waiting_on, ["zhulipeng"]);
+  });
+  it("my CHANGES_REQUESTED followed by an author push is my re-review (PR 2242)", () => {
+    const s = mapSignals(node({
+      reviewDecision: "CHANGES_REQUESTED",
+      reviews: { nodes: [review("Nikhil-Manglore", "APPROVED", "8b09884"), review(ME, "CHANGES_REQUESTED", "8b09884", "2026-08-05T00:00:00Z")] },
+      headRefOid: "f444b16",
+    }), ME);
+    assert.equal(s.my_review, "CHANGES_REQUESTED");
+    assert.equal(s.my_review_stale, true);
+    assert.equal(s.changes_requested, 0); // not standing against the current head
+    assert.deepEqual(s.waiting_on.sort(), ["Nikhil-Manglore", ME].sort());
+  });
+  it("my COMMENTED-only look on an older head means the author pushed since (PR 3603)", () => {
+    const s = mapSignals(node({ reviews: { nodes: [review(ME, "COMMENTED", "old")] } }), ME);
+    assert.equal(s.my_review, "");
+    assert.equal(s.my_last_look, "stale");
+    assert.equal(mapSignals(node({ reviews: { nodes: [review(ME, "COMMENTED", "head")] } }), ME).my_last_look, "current");
+    assert.equal(mapSignals(node(), ME).my_last_look, "");
+  });
+  it("only the latest verdict per reviewer stands", () => {
+    const s = mapSignals(node({ reviews: { nodes: [
+      review("alice", "CHANGES_REQUESTED", "head", "2024-01-01T00:00:00Z"),
+      review("alice", "APPROVED", "head", "2024-01-02T00:00:00Z"),
+    ] } }), ME);
+    assert.equal(s.approvals_current, 1);
+    assert.equal(s.changes_requested, 0);
+  });
+  it("COMMENTED reviews make someone a reviewer but carry no verdict", () => {
+    const s = mapSignals(node({ reviews: { nodes: [review("alice", "COMMENTED", "head")] } }), ME);
+    assert.equal(s.has_human_reviewer, true);
+    assert.deepEqual(s.reviewers, [{ login: "alice", state: "COMMENTED", stale: false }]);
+    assert.deepEqual(s.waiting_on, []);
+  });
+  it("bot reviews and the author's own reviews are ignored", () => {
+    const s = mapSignals(node({ reviews: { nodes: [
+      { author: bot("coderabbitai[bot]"), state: "COMMENTED", submittedAt: "", commit: { oid: "head" } },
+      { author: user("valkey-review-bot"), state: "COMMENTED", submittedAt: "", commit: { oid: "head" } },
+      review("author", "COMMENTED", "head"),
+    ] } }), ME);
+    // valkey-review-bot has a User typename, so it is a human as far as the API says.
+    assert.deepEqual(s.reviewers.map((r) => r.login), ["valkey-review-bot"]);
+  });
+});
 
+describe("mapSignals: review requests", () => {
+  it("a requested user with no verdict owes the first look (PR 4179 / 4223)", () => {
+    const s = mapSignals(node({ reviewRequests: requests("roshkhatri") }), ME);
+    assert.deepEqual(s.waiting_on, ["roshkhatri"]);
+    assert.equal(s.has_human_reviewer, true);
+    assert.equal(s.my_review_requested, false);
+  });
+  it("a request for me is flagged", () => {
+    const s = mapSignals(node({ reviewRequests: requests(ME) }), ME);
+    assert.equal(s.my_review_requested, true);
+  });
+  it("teams are carried as team:<slug>", () => {
+    const s = mapSignals(node({ reviewRequests: requests("team:core") }), ME);
+    assert.deepEqual(s.requested, ["team:core"]);
+    assert.deepEqual(s.waiting_on, ["team:core"]);
+  });
+  it("no reviews and no requests means nobody has engaged (PR 3739 / 4294 / 4715)", () => {
+    assert.equal(mapSignals(node(), ME).has_human_reviewer, false);
+  });
+});
+
+describe("mapSignals: thread turns", () => {
+  it("on my own PR, a thread where someone else spoke last awaits me; one where I spoke last awaits them (PR 4642)", () => {
+    const s = mapSignals(node({ author: user(ME), reviewThreads: { nodes: [
+      thread(user("alice"), user("alice")),
+      thread(user("alice"), user(ME)),
+      thread(user("alice"), user("alice"), true),
+    ] } }), ME);
+    assert.equal(s.unresolved_threads, 2);
+    assert.equal(s.threads_awaiting_me, 1);
+    assert.equal(s.threads_awaiting_them, 1);
+  });
+  it("on someone else's PR, only my own conversations count (PR 4895)", () => {
+    const s = mapSignals(node({ reviewThreads: { nodes: [
+      thread(user(ME), user("author")),      // author replied to me -> awaiting me
+      thread(user(ME), user(ME)),            // I spoke last -> awaiting them
+      thread(user("bob"), user("author")),   // bob's conversation -> not mine
+    ] } }), ME);
+    assert.equal(s.unresolved_threads, 3);
+    assert.equal(s.threads_awaiting_me, 1);
+    assert.equal(s.threads_awaiting_them, 1);
+  });
+  it("on my own PR, a reviewer whose thread I answered last owes the next reply (PR 4895)", () => {
+    const s = mapSignals(node({ author: user(ME), reviewThreads: { nodes: [thread(user("Baraa-Hasheesh"), user(ME))] } }), ME);
+    assert.deepEqual(s.waiting_on, ["Baraa-Hasheesh"]);
+    assert.equal(s.threads_awaiting_them, 1);
+  });
+  it("a thread whose last word is a bot's is counted apart (PR 4118)", () => {
+    const s = mapSignals(node({ author: user(ME), reviewThreads: { nodes: [thread(bot("valkey-review-bot[bot]"), bot("valkey-review-bot[bot]"))] } }), ME);
+    assert.equal(s.threads_bot, 1);
+    assert.equal(s.threads_awaiting_me, 0);
+  });
+});
+
+describe("mapSignals: CI rollup and defaults", () => {
+  it("carries the rollup state", () => {
+    assert.equal(mapSignals(node({ commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] } }), ME).ci_rollup, "FAILURE");
+  });
   it("defaults gracefully on null / empty", () => {
-    assert.deepEqual(mapSignals(null), { review_decision: "", mergeable: "", unresolved_threads: 0 });
-    const s = mapSignals({});
-    assert.equal(s.review_decision, "");
+    const empty = mapSignals(null, ME);
+    assert.equal(empty.review_decision, "");
+    assert.equal(empty.has_human_reviewer, false);
+    assert.deepEqual(empty.waiting_on, []);
+    const s = mapSignals({}, ME);
     assert.equal(s.mergeable, "UNKNOWN");
     assert.equal(s.unresolved_threads, 0);
   });
@@ -49,11 +178,14 @@ describe("mapPR labels", () => {
     created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z",
   };
   it("captures label name + color", () => {
-    const r = mapPR({ ...base, labels: [{ name: "to_be_merged", color: "0e8a16" }] });
-    assert.deepEqual(r.labels, [{ name: "to_be_merged", color: "0e8a16" }]);
+    const r = mapPR({ ...base, labels: [{ name: "to-be-merged", color: "0e8a16" }] });
+    assert.deepEqual(r.labels, [{ name: "to-be-merged", color: "0e8a16" }]);
   });
   it("handles no labels", () => {
     assert.deepEqual(mapPR(base).labels, []);
+  });
+  it("normalizes string labels to {name,color:''}", () => {
+    assert.deepEqual(mapPR({ ...base, labels: ["to-be-merged"] }).labels, [{ name: "to-be-merged", color: "" }]);
   });
 });
 
@@ -67,224 +199,238 @@ describe("ciState", () => {
   it("success when all green", () => {
     assert.equal(ciState(pr({ ci_jobs: jobs("success", "success") })), "success");
   });
-  it("empty when no jobs", () => {
+  it("empty when no jobs and no rollup", () => {
     assert.equal(ciState(pr({ ci_jobs: [] })), "");
   });
+  it("a cancelled lane is 'cancelled', not green and not a failure, even though the rollup says FAILURE (PR 4642)", () => {
+    assert.equal(ciState(pr({ ci_jobs: jobs("success", "cancelled"), ci_rollup: "FAILURE" })), "cancelled");
+  });
+  it("a red rollup with all check-runs green is a failed commit status (e.g. DCO)", () => {
+    assert.equal(ciState(pr({ ci_jobs: jobs("success"), ci_rollup: "FAILURE" })), "failure");
+  });
+  it("falls back to the rollup when there are no check-runs", () => {
+    assert.equal(ciState(pr({ ci_rollup: "SUCCESS" })), "success");
+    assert.equal(ciState(pr({ ci_rollup: "PENDING" })), "pending");
+  });
 });
 
-describe("hasMergeLabel", () => {
-  it("true when a configured label is present", () => {
-    assert.equal(hasMergeLabel(pr({ labels: [{ name: "to_be_merged" }] }), MERGE), true);
-  });
-  it("false otherwise", () => {
+describe("hasMergeLabel / canMerge", () => {
+  it("merge label matches a configured name", () => {
+    assert.equal(hasMergeLabel(pr({ labels: [{ name: "to-be-merged" }] }), MERGE), true);
     assert.equal(hasMergeLabel(pr({ labels: [{ name: "bug" }] }), MERGE), false);
-    assert.equal(hasMergeLabel(pr({ labels: [{ name: "to_be_merged" }] }), []), false);
+    assert.equal(hasMergeLabel(pr({ labels: [{ name: "to-be-merged" }] }), []), false);
+  });
+  it("merge access matches by org or by org/repo, case-insensitively", () => {
+    assert.equal(canMerge(pr(), ["valkey-io"]), true);
+    assert.equal(canMerge(pr(), ["Valkey-IO/valkey"]), true);
+    assert.equal(canMerge(pr(), ["valkey-io/valkey-glide"]), false);
+    assert.equal(canMerge(pr(), []), false);
+    assert.equal(canMerge(pr(), undefined), false);
   });
 });
 
-describe("isClearToLand", () => {
-  it("true only when approved + green + mergeable", () => {
-    assert.equal(isClearToLand(pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") })), true);
+const READY = { approvals_current: 1, mergeable: "MERGEABLE", ci_jobs: jobs("success") };
+
+describe("isClearToLand / isBroken", () => {
+  it("clear only when approved on the current head + green + mergeable + no standing changes-requested", () => {
+    assert.equal(isClearToLand(pr(READY)), true);
+    assert.equal(isClearToLand(pr({ ...READY, ci_jobs: jobs("failure") })), false);
+    assert.equal(isClearToLand(pr({ ...READY, approvals_current: 0, approvals_stale: 1 })), false);
+    assert.equal(isClearToLand(pr({ ...READY, mergeable: "CONFLICTING" })), false);
+    assert.equal(isClearToLand(pr({ ...READY, changes_requested: 1 })), false);
   });
-  it("false if any leg missing", () => {
-    assert.equal(isClearToLand(pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("failure") })), false);
-    assert.equal(isClearToLand(pr({ review_decision: "REVIEW_REQUIRED", mergeable: "MERGEABLE", ci_jobs: jobs("success") })), false);
-    assert.equal(isClearToLand(pr({ review_decision: "APPROVED", mergeable: "CONFLICTING", ci_jobs: jobs("success") })), false);
+  it("a stale APPROVED reviewDecision alone does not make a PR clear", () => {
+    assert.equal(isClearToLand(pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") })), false);
+  });
+  it("broken = CI red, conflict, or changes requested on the current head", () => {
+    assert.equal(isBroken(pr({ ci_jobs: jobs("failure") })), true);
+    assert.equal(isBroken(pr({ mergeable: "CONFLICTING" })), true);
+    assert.equal(isBroken(pr({ changes_requested: 1 })), true);
+    assert.equal(isBroken(pr({ review_decision: "CHANGES_REQUESTED" })), false); // sticky aggregate, ignored
   });
 });
 
-describe("isActionable", () => {
-  const opts = { mergeLabels: MERGE };
-  it("flags CI failure", () => {
-    assert.equal(isActionable(pr({ ci_jobs: jobs("failure") }), opts), true);
+describe("whoseMove — authored tab", () => {
+  const o = { mergeLabels: MERGE, type: "open" };
+  it("ladder: queued-broken > CI > changes > conflict > threads > find-reviewer > ready > cancelled", () => {
+    const s = (x) => computeTriageScore(pr(x), o);
+    const ladder = [
+      s({ labels: [{ name: "to-be-merged" }], ci_jobs: jobs("failure") }),
+      s({ ci_jobs: jobs("failure") }),
+      s({ changes_requested: 1 }),
+      s({ mergeable: "CONFLICTING" }),
+      s({ threads_awaiting_me: 1 }),
+      s({ has_human_reviewer: false }),
+      s(READY),
+      s({ ci_jobs: jobs("cancelled") }),
+    ];
+    for (let i = 1; i < ladder.length; i++) assert.ok(ladder[i - 1] > ladder[i], `tier ${i - 1} (${ladder[i - 1]}) should outrank tier ${i} (${ladder[i]})`);
   });
-  it("flags changes requested, conflict, unresolved threads", () => {
-    assert.equal(isActionable(pr({ review_decision: "CHANGES_REQUESTED" }), opts), true);
-    assert.equal(isActionable(pr({ mergeable: "CONFLICTING" }), opts), true);
-    assert.equal(isActionable(pr({ unresolved_threads: 2 }), opts), true);
+  it("a PR nobody has picked up is MY move to find a reviewer, and stays bright", () => {
+    const m = whoseMove(pr({ has_human_reviewer: false }), o);
+    assert.equal(m.owner, "nobody");
+    assert.equal(m.actionable, true);
   });
-  it("flags clear-to-land that is NOT yet labeled (nudge action)", () => {
-    const ready = pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") });
-    assert.equal(isActionable(ready, opts), true);
+  it("a thread where I spoke last is not my move", () => {
+    const m = whoseMove(pr({ threads_awaiting_them: 2 }), o);
+    assert.equal(m.owner, "idle");
+    assert.equal(m.actionable, false);
   });
-  it("does NOT flag clear-to-land already queued by a maintainer", () => {
-    const queued = pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success"), labels: [{ name: "to_be_merged" }] });
-    assert.equal(isActionable(queued, opts), false);
+  it("a reviewer who owes a look is their move, named, and not actionable", () => {
+    const m = whoseMove(pr({ waiting_on: ["roshkhatri"] }), o);
+    assert.equal(m.owner, "them");
+    assert.deepEqual(m.who, ["roshkhatri"]);
+    assert.equal(m.actionable, false);
   });
-  it("does NOT flag a quiet awaiting-review PR", () => {
-    assert.equal(isActionable(pr({ review_decision: "REVIEW_REQUIRED", mergeable: "MERGEABLE", ci_jobs: jobs("success") }), opts), false);
+  it("ready to land: merge it if I can, otherwise nudge a committer", () => {
+    assert.equal(whoseMove(pr(READY), { ...o, canMerge: true }).owner, "me");
+    assert.equal(whoseMove(pr(READY), { ...o, canMerge: true }).action, "merge");
+    assert.equal(whoseMove(pr(READY), { ...o, canMerge: false }).owner, "committer");
+    assert.equal(whoseMove(pr(READY), { ...o, mergeAccess: ["valkey-io"] }).owner, "me");
+  });
+  it("a stale approval is not ready: the approver owes a re-look (PR 4107 / 4490)", () => {
+    const m = whoseMove(pr({ approvals_stale: 1, waiting_on: ["zhulipeng"], mergeable: "MERGEABLE", ci_jobs: jobs("success") }), o);
+    assert.equal(m.owner, "them");
+  });
+  it("drafts sink to the bottom and are not actionable, even with conflicts (PR 3990)", () => {
+    const m = whoseMove(pr({ draft: true, mergeable: "CONFLICTING" }), o);
+    assert.equal(m.action, "draft");
+    assert.equal(m.score, 5);
+    assert.equal(m.actionable, false);
+  });
+  it("queued + healthy just waits", () => {
+    const m = whoseMove(pr({ ...READY, labels: [{ name: "to-be-merged" }] }), o);
+    assert.equal(m.owner, "queued");
+    assert.equal(m.score, 5);
+    assert.equal(m.actionable, false);
+  });
+  it("a cancelled lane is my move to rerun", () => {
+    assert.equal(whoseMove(pr({ ci_jobs: jobs("cancelled") }), o).action, "rerun cancelled CI");
+  });
+  it("staleness is not an input to ownership on the authored tab", () => {
+    assert.equal(computeTriageScore(pr({ created: "2000-01-01T00:00:00Z" }), o), 0);
   });
 });
 
-describe("computeTriageScore tiers", () => {
-  const o = (type) => ({ mergeLabels: MERGE, type });
-  it("queued-but-broken is most urgent", () => {
-    const s = computeTriageScore(pr({ labels: [{ name: "to_be_merged" }], ci_jobs: jobs("failure") }), o("open"));
-    assert.equal(s, 100);
+describe("whoseMove — reviewed-open tab", () => {
+  const o = { mergeLabels: MERGE, type: "reviewed-open" };
+  it("my changes-requested followed by an author push is my re-review, not the author's move (PR 2242 / 3724)", () => {
+    const m = whoseMove(pr({ review_decision: "CHANGES_REQUESTED", my_review: "CHANGES_REQUESTED", my_review_stale: true }), o);
+    assert.equal(m.owner, "me");
+    assert.equal(m.action, "re-review: author pushed");
+    assert.equal(m.actionable, true);
   });
-  it("orders CI fail > changes > conflict > threads > ready-unlabeled", () => {
-    const ciFail = computeTriageScore(pr({ ci_jobs: jobs("failure") }), o("open"));
-    const changes = computeTriageScore(pr({ review_decision: "CHANGES_REQUESTED" }), o("open"));
-    const conflict = computeTriageScore(pr({ mergeable: "CONFLICTING" }), o("open"));
-    const threads = computeTriageScore(pr({ unresolved_threads: 1 }), o("open"));
-    const ready = computeTriageScore(pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") }), o("open"));
-    assert.ok(ciFail > changes && changes > conflict && conflict > threads && threads > ready);
+  it("my changes-requested with no push since is the author's move", () => {
+    const m = whoseMove(pr({ my_review: "CHANGES_REQUESTED", my_review_stale: false, changes_requested: 1 }), o);
+    assert.equal(m.owner, "them");
+    assert.equal(m.actionable, false);
   });
-  it("authored ladder ignores staleness (that's a review-tab concept)", () => {
-    const old = pr({ created: "2000-01-01T00:00:00Z" });
-    assert.equal(computeTriageScore(old, o("open")), 0);
+  it("a review requested of me outranks everything", () => {
+    assert.equal(whoseMove(pr({ my_review_requested: true, ci_jobs: jobs("failure") }), o).score, 85);
   });
-  it("queued + healthy sinks to the bottom", () => {
-    const queued = pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success"), labels: [{ name: "to_be_merged" }] });
-    assert.equal(computeTriageScore(queued, o("open")), 5);
+  it("the author replied in my thread: my move (PR 4871)", () => {
+    const m = whoseMove(pr({ threads_awaiting_me: 1 }), o);
+    assert.equal(m.owner, "me");
+    assert.equal(m.score, 70);
+  });
+  it("I spoke last in my thread: not my move (PR 4856)", () => {
+    const m = whoseMove(pr({ threads_awaiting_them: 1 }), o);
+    assert.equal(m.actionable, false);
+  });
+  it("a red or conflicting head is the author's move even when I owe a re-review (PR 2238 / 2241)", () => {
+    const m = whoseMove(pr({ my_review: "CHANGES_REQUESTED", my_review_stale: true, ci_jobs: jobs("failure") }), o);
+    assert.equal(m.owner, "them");
+    assert.equal(m.actionable, false);
+  });
+  it("the author pushed after my comment-only look: re-look (PR 3603)", () => {
+    const m = whoseMove(pr({ my_last_look: "stale" }), o);
+    assert.equal(m.owner, "me");
+    assert.ok(m.score < 65);
+  });
+  it("I approved an older head: re-check, below a fresh re-review", () => {
+    const m = whoseMove(pr({ my_review: "APPROVED", my_review_stale: true, approvals_stale: 1 }), o);
+    assert.equal(m.owner, "me");
+    assert.ok(m.score < 85 && m.score > 15);
+  });
+  it("ready to land: merge (80) if I can, nudge a committer (60) if not", () => {
+    assert.equal(whoseMove(pr(READY), { ...o, canMerge: true }).score, 80);
+    assert.equal(whoseMove(pr(READY), { ...o, canMerge: true }).action, "merge");
+    assert.equal(whoseMove(pr(READY), { ...o, canMerge: false }).score, 60);
+    assert.equal(whoseMove(pr(READY), { ...o, canMerge: false }).owner, "committer");
+  });
+  it("broken is the author's move, below everything of mine", () => {
+    assert.equal(whoseMove(pr({ ci_jobs: jobs("failure") }), o).score, 15);
+    assert.equal(whoseMove(pr({ mergeable: "CONFLICTING" }), o).actionable, false);
+  });
+  it("queued + healthy sinks; queued + broken is still the author's move", () => {
+    assert.equal(whoseMove(pr({ ...READY, labels: [{ name: "to-be-merged" }] }), o).score, 5);
+    assert.equal(whoseMove(pr({ labels: [{ name: "to-be-merged" }], ci_jobs: jobs("failure") }), o).owner, "them");
+  });
+  it("approved + green + mergeable UNKNOWN is not ready", () => {
+    assert.equal(whoseMove(pr({ approvals_current: 1, mergeable: "UNKNOWN", ci_jobs: jobs("success") }), o).owner, "idle");
+  });
+});
+
+describe("whoseMove — review tab (incoming requests)", () => {
+  const o = { mergeLabels: MERGE, type: "review" };
+  it("green/clean is my move; broken is the author's and can wait", () => {
+    assert.equal(whoseMove(pr({ ci_jobs: jobs("success") }), o).owner, "me");
+    assert.equal(whoseMove(pr({ ci_jobs: jobs("failure") }), o).owner, "them");
+    assert.equal(whoseMove(pr({ mergeable: "CONFLICTING" }), o).actionable, false);
+  });
+  it("a long wait on me bumps above a fresh green PR", () => {
+    const fresh = computeTriageScore(pr({ ci_jobs: jobs("success"), created: new Date().toISOString() }), o);
+    const stale = computeTriageScore(pr({ ci_jobs: jobs("success"), created: "2000-01-01T00:00:00Z" }), o);
+    assert.ok(stale > fresh);
+  });
+  it("stale bump boundary is strictly > 7 days", () => {
+    const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
+    assert.equal(computeTriageScore(pr({ ci_jobs: jobs("success"), created: daysAgo(7) }), o), 60);
+    assert.equal(computeTriageScore(pr({ ci_jobs: jobs("success"), created: daysAgo(8) }), o), 85);
+  });
+  it("pending CI scores the same as green (not failing)", () => {
+    const pending = computeTriageScore(pr({ ci_jobs: jobs("pending"), created: new Date().toISOString() }), o);
+    const green = computeTriageScore(pr({ ci_jobs: jobs("success"), created: new Date().toISOString() }), o);
+    assert.equal(pending, green);
+  });
+});
+
+describe("isActionable is whoseMove().actionable", () => {
+  it("agrees across tabs", () => {
+    for (const type of ["open", "reviewed-open", "review"]) {
+      const o = { mergeLabels: MERGE, type };
+      for (const x of [{}, READY, { ci_jobs: jobs("failure") }, { threads_awaiting_me: 1 }, { has_human_reviewer: false }]) {
+        assert.equal(isActionable(pr(x), o), whoseMove(pr(x), o).actionable, `${type} ${JSON.stringify(x)}`);
+      }
+    }
   });
 });
 
 describe("sortPRs triage mode", () => {
   it("orders by urgency then recency, and is non-destructive", () => {
     const list = [
-      pr({ number: 1, updated: "2024-01-05T00:00:00Z" }), // baseline 0
-      pr({ number: 2, ci_jobs: jobs("failure") }),         // 90
-      pr({ number: 3, mergeable: "CONFLICTING" }),         // 70
+      pr({ number: 1, updated: "2024-01-05T00:00:00Z" }),       // idle 0
+      pr({ number: 2, ci_jobs: jobs("failure") }),               // 90
+      pr({ number: 3, mergeable: "CONFLICTING" }),               // 70
+      pr({ number: 4, has_human_reviewer: false }),              // 55
+      pr({ number: 5, waiting_on: ["x"] }),                      // 10
     ];
     const copy = JSON.stringify(list);
     const sorted = sortPRs(list, "triage", { type: "open", mergeLabels: MERGE });
-    assert.deepEqual(sorted.map(p => p.number), [2, 3, 1]);
-    assert.equal(JSON.stringify(list), copy); // original untouched
+    assert.deepEqual(sorted.map(p => p.number), [2, 3, 4, 5, 1]);
+    assert.equal(JSON.stringify(list), copy);
+  });
+  it("reviewed-open: my re-review > nudge > author's move > queued", () => {
+    const list = [
+      pr({ number: 1, ...READY, labels: [{ name: "to-be-merged" }] }),
+      pr({ number: 2, changes_requested: 1, ci_jobs: jobs("success") }),
+      pr({ number: 3, ...READY }),
+      pr({ number: 4, my_review: "CHANGES_REQUESTED", my_review_stale: true }),
+    ];
+    assert.deepEqual(sortPRs(list, "triage", { type: "reviewed-open", mergeLabels: MERGE }).map(p => p.number), [4, 3, 2, 1]);
   });
   it("still supports chronological modes", () => {
     const list = [pr({ number: 1, updated: "2024-01-01T00:00:00Z" }), pr({ number: 2, updated: "2024-02-01T00:00:00Z" })];
     assert.deepEqual(sortPRs(list, "updated").map(p => p.number), [2, 1]);
-  });
-});
-
-describe("incoming review scoring (review tab, ready-first)", () => {
-  const o = { mergeLabels: MERGE, type: "review" };
-  it("green/clean outranks broken", () => {
-    assert.ok(
-      computeTriageScore(pr({ ci_jobs: jobs("success") }), o) >
-      computeTriageScore(pr({ ci_jobs: jobs("failure") }), o)
-    );
-  });
-  it("a long wait on you bumps above a fresh green PR", () => {
-    const fresh = computeTriageScore(pr({ ci_jobs: jobs("success"), created: new Date().toISOString() }), o);
-    const stale = computeTriageScore(pr({ ci_jobs: jobs("success"), created: "2000-01-01T00:00:00Z" }), o);
-    assert.ok(stale > fresh);
-  });
-  it("green+stale tops broken+stale", () => {
-    const g = computeTriageScore(pr({ ci_jobs: jobs("success"), created: "2000-01-01T00:00:00Z" }), o);
-    const b = computeTriageScore(pr({ ci_jobs: jobs("failure"), created: "2000-01-01T00:00:00Z" }), o);
-    assert.ok(g > b);
-  });
-});
-
-describe("outgoing review scoring (reviewed-open tab, ready-to-merge-first)", () => {
-  const o = { mergeLabels: MERGE, type: "reviewed-open" };
-  const ready = pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") });
-  it("ready + unqueued (nudge a committer) is highest", () => {
-    assert.equal(computeTriageScore(ready, o), 80);
-  });
-  it("orders nudge > broken > queued-healthy", () => {
-    const broken = computeTriageScore(pr({ review_decision: "CHANGES_REQUESTED", ci_jobs: jobs("success") }), o);
-    const queued = computeTriageScore(pr({ ...ready, labels: [{ name: "to_be_merged" }] }), o);
-    assert.ok(computeTriageScore(ready, o) > broken && broken > queued);
-  });
-});
-
-describe("per-tab isActionable", () => {
-  it("review tab: green actionable, CI-failing not", () => {
-    assert.equal(isActionable(pr({ ci_jobs: jobs("success") }), { type: "review", mergeLabels: MERGE }), true);
-    assert.equal(isActionable(pr({ ci_jobs: jobs("failure") }), { type: "review", mergeLabels: MERGE }), false);
-  });
-  it("reviewed-open: ready-unqueued & threads actionable; queued/broken not", () => {
-    const o = { type: "reviewed-open", mergeLabels: MERGE };
-    assert.equal(isActionable(pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") }), o), true);
-    assert.equal(isActionable(pr({ unresolved_threads: 1 }), o), true);
-    assert.equal(isActionable(pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success"), labels: [{ name: "to_be_merged" }] }), o), false);
-    assert.equal(isActionable(pr({ ci_jobs: jobs("failure") }), o), false);
-  });
-});
-
-// (1) sortPRs("triage") end-to-end for the review + reviewed-open tabs
-describe("sortPRs triage — review tab (ready-first)", () => {
-  const o = { type: "review", mergeLabels: MERGE };
-  it("orders green+stale > green+fresh > CI-failing", () => {
-    const list = [
-      pr({ number: 1, ci_jobs: jobs("failure"), created: new Date().toISOString() }),   // 20
-      pr({ number: 2, ci_jobs: jobs("success"), created: new Date().toISOString() }),   // 60
-      pr({ number: 3, ci_jobs: jobs("success"), created: "2000-01-01T00:00:00Z" }),      // 85
-    ];
-    assert.deepEqual(sortPRs(list, "triage", o).map(p => p.number), [3, 2, 1]);
-  });
-});
-
-describe("sortPRs triage — reviewed-open tab (nudge-first)", () => {
-  const o = { type: "reviewed-open", mergeLabels: MERGE };
-  it("orders nudge > broken > queued-healthy", () => {
-    const ready = { review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("success") };
-    const list = [
-      pr({ number: 1, ...ready, labels: [{ name: "to_be_merged" }] }),      // 5 queued-healthy
-      pr({ number: 2, review_decision: "CHANGES_REQUESTED", ci_jobs: jobs("success") }), // 15 broken
-      pr({ number: 3, ...ready }),                                            // 80 nudge
-    ];
-    assert.deepEqual(sortPRs(list, "triage", o).map(p => p.number), [3, 2, 1]);
-  });
-});
-
-// (2) Pending CI: not ready, not broken, and scored the same as green on review
-describe("pending CI semantics", () => {
-  const p = pr({ review_decision: "APPROVED", mergeable: "MERGEABLE", ci_jobs: jobs("pending") });
-  it("ciState reports pending", () => {
-    assert.equal(ciState(p), "pending");
-  });
-  it("pending is neither clear-to-land nor broken", () => {
-    assert.equal(isClearToLand(p), false); // needs success, not pending
-    assert.equal(isBroken(p), false);      // pending is not a failure
-  });
-  it("review tab scores pending same as green (not failing)", () => {
-    const pending = computeTriageScore(pr({ ci_jobs: jobs("pending"), created: new Date().toISOString() }), { type: "review" });
-    const green = computeTriageScore(pr({ ci_jobs: jobs("success"), created: new Date().toISOString() }), { type: "review" });
-    assert.equal(pending, green);
-    assert.equal(pending, 60);
-  });
-  it("authored tab scores a pending-only PR as baseline", () => {
-    assert.equal(computeTriageScore(pr({ ci_jobs: jobs("pending") }), { type: "open", mergeLabels: MERGE }), 0);
-  });
-});
-
-// (3) Explicit assertions for the outgoing 60 (nearly-ready) and 40 (threads) tiers
-describe("outgoing review scoring — nearly-ready and threads tiers", () => {
-  const o = { type: "reviewed-open", mergeLabels: MERGE };
-  it("approved + green + mergeable UNKNOWN scores 60 (nearly ready)", () => {
-    assert.equal(computeTriageScore(pr({ review_decision: "APPROVED", mergeable: "UNKNOWN", ci_jobs: jobs("success") }), o), 60);
-  });
-  it("unresolved threads (not broken/approved/labelled) scores 40", () => {
-    assert.equal(computeTriageScore(pr({ review_decision: "REVIEW_REQUIRED", ci_jobs: jobs("success"), unresolved_threads: 2 }), o), 40);
-  });
-});
-
-// (4) mapPR handles string-form labels (GitHub returns either shape)
-describe("mapPR string-form labels", () => {
-  const base = {
-    title: "t", number: 1,
-    repository_url: "https://api.github.com/repos/valkey-io/valkey",
-    html_url: "https://github.com/valkey-io/valkey/pull/1",
-    user: { login: "x", avatar_url: "" },
-    created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z",
-  };
-  it("normalizes string labels to {name,color:''}", () => {
-    assert.deepEqual(mapPR({ ...base, labels: ["to_be_merged"] }).labels, [{ name: "to_be_merged", color: "" }]);
-  });
-});
-
-// (5) daysOld > 7 boundary in the review-tab stale bump
-describe("review stale bump boundary (strict > 7)", () => {
-  const o = { type: "review" };
-  const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
-  it("exactly 7 days => no bump (60)", () => {
-    assert.equal(computeTriageScore(pr({ ci_jobs: jobs("success"), created: daysAgo(7) }), o), 60);
-  });
-  it("8 days => bump (85)", () => {
-    assert.equal(computeTriageScore(pr({ ci_jobs: jobs("success"), created: daysAgo(8) }), o), 85);
   });
 });

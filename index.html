@@ -109,6 +109,17 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .badge-ci-fail { background: var(--color-danger-subtle); color: var(--color-danger-fg); }
 .badge-conflict { background: var(--color-attention-subtle); color: var(--color-attention-fg); }
 .badge-threads { background: var(--color-accent-subtle); color: var(--color-accent-fg); font-variant-numeric: tabular-nums; }
+.badge-threads-them { background: var(--color-neutral-subtle); color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+.badge-threads-bot { background: none; border: 1px dashed var(--color-border-default); color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+.badge-ci-cancelled { background: var(--color-neutral-subtle); color: var(--color-fg-muted); }
+/* Whose move: the one chip that says what, if anything, this row wants from you. */
+.badge-move { font-weight: 600; }
+.badge-move-me { background: var(--color-accent-emphasis); color: #fff; }
+.badge-move-nobody { background: var(--color-attention-subtle); color: var(--color-attention-fg); border: 1px solid var(--color-attention-fg); }
+.badge-move-committer { background: var(--color-success-subtle); color: var(--color-success-fg); }
+.badge-move-them { background: var(--color-neutral-subtle); color: var(--color-fg-muted); font-weight: 500; }
+.badge-move-queued { background: var(--color-neutral-subtle); color: var(--color-fg-muted); font-weight: 500; }
+.badge-move-idle { background: var(--color-neutral-subtle); color: var(--color-fg-muted); font-weight: 500; }
 .pr-merge-label { border: 1px solid var(--color-border-default); font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; }
 .move-btn { background: none; border: 1px solid var(--color-border-default); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--color-fg-muted); cursor: pointer; margin-left: auto; flex-shrink: 0; }
 .move-btn:hover { border-color: var(--color-accent-emphasis); color: var(--color-accent-fg); }
@@ -117,6 +128,7 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .ci-success { background: var(--color-success-fg); }
 .ci-failure { background: var(--color-danger-fg); }
 .ci-pending { background: var(--color-attention-fg); }
+.ci-cancelled { background: var(--color-neutral-muted); border: 1px solid var(--color-fg-muted); box-sizing: border-box; }
 .ci-neutral { background: var(--color-neutral-muted); }
 .pr-quiet { opacity: 0.55; }
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; margin-top: 8px; }

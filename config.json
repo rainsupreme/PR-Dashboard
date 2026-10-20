@@ -5,6 +5,9 @@
   ],
   "title": "PR Dashboard",
   "merge_labels": [
-    "to_be_merged"
+    "to-be-merged"
+  ],
+  "merge_access": [
+    "valkey-io"
   ]
 }
