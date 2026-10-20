@@ -268,10 +268,16 @@ async function fetchCIStatus(base, sha) {
         ci_jobs.push({ name: run.name, status: "pending", url: run.html_url || "" });
       } else if (run.conclusion === "success") {
         ci_jobs.push({ name: run.name, status: "success", url: run.html_url || "" });
-      } else if (run.conclusion === "failure") {
+      } else if (run.conclusion === "failure" || run.conclusion === "timed_out") {
         ci_jobs.push({ name: run.name, status: "failure", url: run.html_url || "" });
+      } else if (run.conclusion === "cancelled") {
+        // A cancelled lane is neither green nor a real failure: it needs a
+        // rerun, not a fix. Kept distinct so it is not reported as either.
+        ci_jobs.push({ name: run.name, status: "cancelled", url: run.html_url || "" });
+      } else if (run.conclusion === "action_required") {
+        ci_jobs.push({ name: run.name, status: "pending", url: run.html_url || "" });
       }
-      // skip: skipped, neutral, cancelled
+      // skip: skipped, neutral, stale
     }
     return { ci_jobs };
   } catch (e) {
@@ -354,18 +360,150 @@ async function enrichIssuesWithActivity(issues, label) {
   return enriched;
 }
 
-// Pure mapper: turns a GraphQL pullRequest node into flat triage signals.
-// Kept separate from the network call so it can be unit-tested.
-function mapSignals(prNode) {
-  if (!prNode) return { review_decision: "", mergeable: "", unresolved_threads: 0 };
-  const threads = prNode.reviewThreads?.nodes || [];
-  const unresolved = threads.filter((t) => t && t.isResolved === false).length;
+const EMPTY_SIGNALS = Object.freeze({
+  review_decision: "",
+  mergeable: "UNKNOWN",
+  ci_rollup: "",
+  head_oid: "",
+  unresolved_threads: 0,
+  threads_awaiting_me: 0,
+  threads_awaiting_them: 0,
+  threads_bot: 0,
+  reviewers: [],
+  requested: [],
+  waiting_on: [],
+  approvals_current: 0,
+  approvals_stale: 0,
+  changes_requested: 0,
+  has_human_reviewer: false,
+  my_review: "",
+  my_review_stale: false,
+  my_last_look: "",
+  my_review_requested: false,
+});
+
+function isBotActor(node) {
+  const a = (node || {}).author || {};
+  return a.__typename === "Bot" || /\[bot\]$/.test(a.login || "");
+}
+
+// Pure mapper: turns a GraphQL pullRequest node into flat, turn-aware triage
+// signals relative to `me`. Kept separate from the network call so it can be
+// unit-tested.
+//
+// GitHub's aggregate fields are sticky across pushes: reviewDecision stays
+// APPROVED / CHANGES_REQUESTED after the author pushes, and a review thread
+// stays unresolved until a reviewer clicks resolve regardless of who spoke
+// last. So the aggregates are kept only for display, and the fields that drive
+// triage are derived here from per-review commit oids and per-thread last
+// commenters, which is enough to tell whose move it is.
+function mapSignals(prNode, me) {
+  if (!prNode) return { ...EMPTY_SIGNALS, mergeable: "" };
+  const meLower = (me || "").toLowerCase();
+  const author = (prNode.author?.login || "").toLowerCase();
+  const iAmAuthor = !!meLower && author === meLower;
+  const head = prNode.headRefOid || "";
+
+  // Latest non-COMMENTED review per non-bot, non-author reviewer, with the
+  // commit it was given on. A verdict on an older head is "stale": the
+  // reviewer owes another look, and an approval no longer clears the PR.
+  const latest = new Map();
+  // My most recent review of any kind (COMMENTED included) and the head it
+  // was on: a look on an older head means the author has pushed since.
+  let myLastLook = null;
+  for (const r of prNode.reviews?.nodes || []) {
+    if (!r || isBotActor(r)) continue;
+    const login = r.author?.login || "";
+    if (!login || login.toLowerCase() === author) continue;
+    if (login.toLowerCase() === meLower && (!myLastLook || (r.submittedAt || "") >= (myLastLook.at || ""))) {
+      myLastLook = { oid: r.commit?.oid || "", at: r.submittedAt || "" };
+    }
+    if (r.state === "COMMENTED" || r.state === "PENDING") {
+      if (!latest.has(login.toLowerCase())) latest.set(login.toLowerCase(), { login, state: "COMMENTED", oid: "", at: r.submittedAt || "" });
+      continue;
+    }
+    const prev = latest.get(login.toLowerCase());
+    if (!prev || prev.state === "COMMENTED" || (r.submittedAt || "") >= (prev.at || "")) {
+      latest.set(login.toLowerCase(), { login, state: r.state, oid: r.commit?.oid || "", at: r.submittedAt || "" });
+    }
+  }
+  const reviewers = [...latest.values()].map(({ login, state, oid }) => ({
+    login,
+    state,
+    stale: state !== "COMMENTED" && !!head && !!oid && oid !== head,
+  }));
+
+  const requested = [];
+  for (const n of prNode.reviewRequests?.nodes || []) {
+    const rr = (n || {}).requestedReviewer || {};
+    if (rr.login) requested.push(rr.login);
+    else if (rr.slug) requested.push(`team:${rr.slug}`);
+  }
+
+  // Who owes a look: current requests without a current-head verdict, plus
+  // anyone whose verdict predates the head.
+  const verdictAtHead = new Set(
+    reviewers.filter((r) => r.state !== "COMMENTED" && !r.stale).map((r) => r.login.toLowerCase())
+  );
+  const waiting = new Set();
+  for (const who of requested) {
+    if (!verdictAtHead.has(who.toLowerCase())) waiting.add(who);
+  }
+  for (const r of reviewers) if (r.stale) waiting.add(r.login);
+
+  // Unresolved threads, split by whose reply is pending. On my own PR every
+  // thread is mine to answer; on someone else's PR only threads I opened are
+  // my conversations. A thread whose last word is a bot's is counted apart:
+  // worth a look, but not a human waiting on anyone. On my own PR, a reviewer
+  // whose thread I answered last owes the next reply, so they join waiting_on.
+  let unresolved = 0, awaitingMe = 0, awaitingThem = 0, bot = 0;
+  for (const t of prNode.reviewThreads?.nodes || []) {
+    if (!t || t.isResolved !== false) continue;
+    unresolved++;
+    const first = t.opener?.nodes?.[0] || null;
+    const last = t.latest?.nodes?.[0] || first;
+    if (isBotActor(last)) { bot++; continue; }
+    const lastLogin = (last?.author?.login || "").toLowerCase();
+    const firstLogin = (first?.author?.login || "").toLowerCase();
+    if (!meLower) continue;
+    if (!iAmAuthor && firstLogin !== meLower && lastLogin !== meLower) continue; // someone else's conversation
+    if (lastLogin === meLower) {
+      awaitingThem++;
+      if (iAmAuthor && first?.author?.login && !isBotActor(first) && firstLogin !== meLower) waiting.add(first.author.login);
+    } else {
+      awaitingMe++;
+    }
+  }
+
+  const mine = reviewers.find((r) => r.login.toLowerCase() === meLower);
+  const myVerdict = mine && mine.state !== "COMMENTED" ? mine : null;
+  const rollup = prNode.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state || "";
+
   return {
-    // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | null
+    // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | null (sticky; display only)
     review_decision: prNode.reviewDecision || "",
     // MERGEABLE | CONFLICTING | UNKNOWN
     mergeable: prNode.mergeable || "UNKNOWN",
+    // SUCCESS | FAILURE | ERROR | PENDING | EXPECTED | "" — includes commit
+    // statuses (e.g. DCO) that check-runs alone miss.
+    ci_rollup: rollup,
+    head_oid: head,
     unresolved_threads: unresolved,
+    threads_awaiting_me: awaitingMe,
+    threads_awaiting_them: awaitingThem,
+    threads_bot: bot,
+    reviewers,
+    requested,
+    waiting_on: [...waiting],
+    approvals_current: reviewers.filter((r) => r.state === "APPROVED" && !r.stale).length,
+    approvals_stale: reviewers.filter((r) => r.state === "APPROVED" && r.stale).length,
+    changes_requested: reviewers.filter((r) => r.state === "CHANGES_REQUESTED" && !r.stale).length,
+    has_human_reviewer: reviewers.length > 0 || requested.length > 0,
+    my_review: myVerdict ? myVerdict.state : "",
+    my_review_stale: !!(myVerdict && myVerdict.stale),
+    // "" (never looked) | "current" (looked at this head) | "stale" (author pushed since)
+    my_last_look: !myLastLook ? "" : (head && myLastLook.oid && myLastLook.oid !== head ? "stale" : "current"),
+    my_review_requested: requested.some((w) => w.toLowerCase() === meLower),
   };
 }
 
@@ -375,7 +513,22 @@ query($owner: String!, $name: String!, $number: Int!) {
     pullRequest(number: $number) {
       reviewDecision
       mergeable
-      reviewThreads(first: 100) { nodes { isResolved } }
+      headRefOid
+      author { login }
+      reviewRequests(first: 20) {
+        nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } }
+      }
+      reviews(last: 100) {
+        nodes { author { login __typename } state submittedAt commit { oid } }
+      }
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          opener: comments(first: 1) { nodes { author { login __typename } } }
+          latest: comments(last: 1) { nodes { author { login __typename } } }
+        }
+      }
+      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
     }
   }
 }`;
@@ -384,10 +537,10 @@ async function fetchPRSignals(pr) {
   const [owner, name] = pr.url.replace("https://github.com/", "").split("/");
   try {
     const data = await graphql(PR_SIGNALS_QUERY, { owner, name, number: pr.number });
-    return mapSignals(data?.repository?.pullRequest);
+    return mapSignals(data?.repository?.pullRequest, GITHUB_USER);
   } catch (e) {
     console.warn(`  Failed to fetch signals for #${pr.number}: ${e.message}`);
-    return { review_decision: "", mergeable: "UNKNOWN", unresolved_threads: 0 };
+    return { ...EMPTY_SIGNALS };
   }
 }
 
@@ -454,12 +607,13 @@ async function main() {
   const mentions = allMentionItems.map(mapMention);
 
   // Enrich open PRs with activity (commits, reviews, comments)
-  const toReviewEnriched = await enrichWithActivity(toReview, "to-review");
+  let toReviewEnriched = await enrichWithActivity(toReview, "to-review");
   let openPrsEnriched = await enrichWithActivity(openPrs, "your-open");
   let reviewedOpenEnriched = await enrichWithActivity(reviewedOpen, "reviewed-open");
 
-  // Enrich the two "in-flight" lists with GraphQL triage signals
-  // (review decision, mergeable/conflict state, unresolved review threads).
+  // Enrich every in-flight list with GraphQL triage signals (per-reviewer
+  // verdicts against the head commit, who owes a look, thread turns, CI rollup).
+  toReviewEnriched = await enrichWithSignals(toReviewEnriched, "to-review");
   openPrsEnriched = await enrichWithSignals(openPrsEnriched, "your-open");
   reviewedOpenEnriched = await enrichWithSignals(reviewedOpenEnriched, "reviewed-open");
 

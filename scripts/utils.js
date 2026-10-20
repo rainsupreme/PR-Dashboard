@@ -45,15 +45,21 @@ function sortPRs(prs, sortBy, opts) {
   });
 }
 
-// Derive a single CI state from the per-job list.
-// "failure" if any job failed, else "pending" if any still running,
-// else "success" if there is at least one job, else "" (unknown / no CI).
+// Derive a single CI state from the per-job list plus the GraphQL rollup.
+// "failure" if any job failed, or the rollup is red with nothing cancelled
+// (a commit status such as DCO that check-runs alone cannot see); else
+// "cancelled" if a lane was cancelled (needs a rerun, not a fix); else
+// "pending" if anything is still running; else "success"; else "" (no CI).
 function ciState(pr) {
   const jobs = pr.ci_jobs || [];
-  if (jobs.length === 0) return "";
-  if (jobs.some((j) => j.status === "failure")) return "failure";
-  if (jobs.some((j) => j.status === "pending")) return "pending";
-  return "success";
+  const rollup = pr.ci_rollup || "";
+  const has = (s) => jobs.some((j) => j.status === s);
+  if (has("failure")) return "failure";
+  if ((rollup === "FAILURE" || rollup === "ERROR") && !has("cancelled")) return "failure";
+  if (has("cancelled")) return "cancelled";
+  if (has("pending") || rollup === "PENDING" || rollup === "EXPECTED") return "pending";
+  if (jobs.length > 0 || rollup === "SUCCESS") return "success";
+  return "";
 }
 
 function hasMergeLabel(pr, mergeLabels) {
@@ -62,96 +68,120 @@ function hasMergeLabel(pr, mergeLabels) {
   return (pr.labels || []).some((l) => set.has(l.name));
 }
 
-// "Clear to land": mechanically ready (approved + CI green + no conflict).
-// Distinct from the maintainer-applied merge label.
+// Whether the dashboard user can merge in this PR's repo. `mergeAccess` lists
+// orgs ("valkey-io") and/or repos ("valkey-io/valkey") from config.json.
+function canMerge(pr, mergeAccess) {
+  if (!mergeAccess || mergeAccess.length === 0) return false;
+  const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\//.exec(pr.url || "");
+  if (!m) return false;
+  const org = m[1].toLowerCase(), repo = `${m[1]}/${m[2]}`.toLowerCase();
+  return mergeAccess.some((a) => { const x = String(a).toLowerCase(); return x === org || x === repo; });
+}
+
+// "Clear to land": approved by someone on the *current* head, no standing
+// request for changes on it, CI green and no conflict. Uses the per-reviewer
+// verdicts rather than GitHub's reviewDecision, which stays APPROVED after
+// the author pushes. Distinct from the maintainer-applied merge label.
 function isClearToLand(pr) {
   return (
-    pr.review_decision === "APPROVED" &&
+    (pr.approvals_current || 0) > 0 &&
+    (pr.changes_requested || 0) === 0 &&
     ciState(pr) === "success" &&
     pr.mergeable === "MERGEABLE"
   );
 }
 
-// A PR is "broken" when it has a problem its author must fix. On the review
-// tab only CI is known (those PRs aren't GraphQL-enriched), so this degrades
-// to CI-only there.
+// A PR is "broken" when it has a problem its author must fix.
 function isBroken(pr) {
   return (
     ciState(pr) === "failure" ||
     pr.mergeable === "CONFLICTING" ||
-    pr.review_decision === "CHANGES_REQUESTED"
+    (pr.changes_requested || 0) > 0
   );
 }
 
-// Whether a PR needs the user's attention now — keeps it bright (undimmed)
-// even with no new activity. Semantics differ by tab because the *action*
-// differs: on your own PRs the ball is on you (broken = act); on PRs you're
-// reviewing the ball is on the author (ready/green = act).
-function isActionable(pr, opts) {
-  const { mergeLabels, type } = opts || {};
+// Whose move is it on this PR, relative to the dashboard user?
+//
+// Returns { owner, action, who, score, actionable }:
+//   owner      "me" | "them" | "nobody" | "committer" | "queued" | "idle"
+//   action     short label for the chip ("re-review", "find a reviewer", ...)
+//   who        logins the PR is waiting on (owner === "them")
+//   score      triage rank, higher = more urgent
+//   actionable keep the row bright even with no new activity
+//
+// The ladder differs by tab because the user's relationship to the PR does:
+// on an authored PR the user is the author, on the review tabs a reviewer. The
+// opts.canMerge flag (or opts.mergeAccess, an org/repo list resolved per PR)
+// turns "ready to merge" from a nudge into the user's own move. Time is not an
+// input to ownership; it is shown beside the chip and left to the user to
+// judge.
+function whoseMove(pr, opts) {
+  const { mergeLabels, type, mergeAccess } = opts || {};
+  const mayMerge = opts && opts.canMerge !== undefined ? !!opts.canMerge : canMerge(pr, mergeAccess);
+  const labeled = hasMergeLabel(pr, mergeLabels);
+  const ci = ciState(pr);
+  const conflict = pr.mergeable === "CONFLICTING";
+  const waiting = pr.waiting_on || [];
+  const mv = (owner, action, score, actionable, who) => ({ owner, action, who: who || [], score, actionable });
+
   if (type === "review") {
-    // Incoming review: your review is the last mile unless it's broken.
-    return ciState(pr) !== "failure";
+    // Incoming request: the review is the last mile unless the author has
+    // something to fix first.
+    if (ci === "failure") return mv("them", "author fixing CI", 20, false, [pr.author]);
+    if (conflict) return mv("them", "author rebasing", 25, false, [pr.author]);
+    const score = 60 + (daysOld(pr.created) > 7 ? 25 : 0);
+    return mv("me", "review", score, true);
   }
+
   if (type === "reviewed-open") {
-    // Ready to nudge a committer, or a thread awaiting your re-review.
-    if (isClearToLand(pr) && !hasMergeLabel(pr, mergeLabels)) return true;
-    if ((pr.unresolved_threads || 0) > 0) return true;
-    return false;
+    if (labeled && !isBroken(pr)) return mv("queued", "queued for merge", 5, false);
+    // An explicit request and a reply in my own thread are cheap and do not
+    // need green CI, so they outrank the author's blockers.
+    if (pr.my_review_requested) return mv("me", "review requested", 85, true);
+    if ((pr.threads_awaiting_me || 0) > 0) return mv("me", `reply in ${pr.threads_awaiting_me} thread${pr.threads_awaiting_me > 1 ? "s" : ""}`, 70, true);
+    // A re-review of a head that is red or conflicting is likely wasted: the
+    // author will push again. Their move first.
+    if (isBroken(pr)) return mv("them", "author's move", 15, false, [pr.author]);
+    if (pr.my_review === "CHANGES_REQUESTED" && pr.my_review_stale) return mv("me", "re-review: author pushed", 85, true);
+    if (pr.my_review === "APPROVED" && pr.my_review_stale) return mv("me", "re-check: approved an older head", 65, true);
+    if (!pr.my_review && pr.my_last_look === "stale") return mv("me", "re-look: author pushed since your comments", 62, true);
+    if (isClearToLand(pr) && !labeled) {
+      return mayMerge ? mv("me", "merge", 80, true) : mv("committer", "nudge a committer", 60, true);
+    }
+    if (ci === "cancelled") return mv("them", "CI cancelled, needs rerun", 12, false, [pr.author]);
+    if (waiting.length > 0) return mv("them", "waiting on", 10, false, waiting);
+    if (!pr.my_review && pr.my_last_look === "current") return mv("them", "awaiting author's reply", 10, false, [pr.author]);
+    if ((pr.approvals_current || 0) > 0 && ci !== "success") return mv("idle", "approved, CI running", 8, false);
+    return mv("idle", "", 0, false);
   }
-  // Authored ("open"): broken-first — the more broken, the more it needs you.
-  if (ciState(pr) === "failure") return true;
-  if (pr.review_decision === "CHANGES_REQUESTED") return true;
-  if (pr.mergeable === "CONFLICTING") return true;
-  if ((pr.unresolved_threads || 0) > 0) return true;
-  if (isClearToLand(pr) && !hasMergeLabel(pr, mergeLabels)) return true;
-  return false;
+
+  // Authored ("open"): what remains for the author to do, most broken first.
+  if (pr.draft) return mv("me", "draft", 5, false);
+  if (labeled && (ci === "failure" || conflict)) return mv("me", "queued but broken", 100, true);
+  if (ci === "failure") return mv("me", "fix CI", 90, true);
+  if ((pr.changes_requested || 0) > 0) return mv("me", "address requested changes", 80, true);
+  if (conflict) return mv("me", "rebase", 70, true);
+  if ((pr.threads_awaiting_me || 0) > 0) return mv("me", `reply in ${pr.threads_awaiting_me} thread${pr.threads_awaiting_me > 1 ? "s" : ""}`, 60, true);
+  if (!pr.has_human_reviewer && !labeled) return mv("nobody", "find a reviewer", 55, true);
+  if (isClearToLand(pr) && !labeled) {
+    return mayMerge ? mv("me", "merge", 50, true) : mv("committer", "nudge a committer", 50, true);
+  }
+  if (ci === "cancelled") return mv("me", "rerun cancelled CI", 45, true);
+  if (labeled) return mv("queued", "queued for merge", 5, false);
+  if (waiting.length > 0) return mv("them", "waiting on", 10, false, waiting);
+  if ((pr.approvals_current || 0) > 0 && ci !== "success") return mv("idle", "approved, CI running", 8, false);
+  return mv("idle", "", 0, false);
+}
+
+// Whether a PR needs the user's attention now — keeps it bright (undimmed)
+// even with no new activity.
+function isActionable(pr, opts) {
+  return whoseMove(pr, opts).actionable;
 }
 
 // Triage priority (higher = more urgent), ranked per-tab.
 function computeTriageScore(pr, opts) {
-  const { mergeLabels, type } = opts || {};
-  if (type === "review") return scoreIncomingReview(pr);
-  if (type === "reviewed-open") return scoreOutgoingReview(pr, mergeLabels);
-  return scoreAuthored(pr, mergeLabels);
-}
-
-// Your own PRs — broken-first. The more broken, the more of your work remains.
-function scoreAuthored(pr, mergeLabels) {
-  const labeled = hasMergeLabel(pr, mergeLabels);
-  const ci = ciState(pr);
-  const broken = ci === "failure" || pr.mergeable === "CONFLICTING";
-  if (labeled && broken) return 100;              // queued for merge but now broken
-  if (ci === "failure") return 90;
-  if (pr.review_decision === "CHANGES_REQUESTED") return 80;
-  if (pr.mergeable === "CONFLICTING") return 70;
-  if ((pr.unresolved_threads || 0) > 0) return 60;
-  if (isClearToLand(pr) && !labeled) return 50;   // ready -> nudge a maintainer
-  if (labeled) return 5;                          // queued + healthy -> just wait
-  return 0;
-}
-
-// PRs awaiting your review — ready/green-first: your review unblocks merge,
-// so the closer to mergeable the higher; a long wait on you bumps it further.
-// CI-only + staleness (these PRs are not GraphQL-enriched).
-function scoreIncomingReview(pr) {
-  let score = ciState(pr) === "failure" ? 20 : 60; // broken = author's turn, can wait
-  if (daysOld(pr.created) > 7) score += 25;        // been waiting on you a long time
-  return score;
-}
-
-// PRs you reviewed — ready-to-merge-first: the closer to landing, the more
-// valuable your nudge. Broken PRs are the author's move; already-queued
-// healthy PRs just wait.
-function scoreOutgoingReview(pr, mergeLabels) {
-  const labeled = hasMergeLabel(pr, mergeLabels);
-  const ci = ciState(pr);
-  if (isBroken(pr)) return 15;                      // ball back with the author
-  if (labeled) return 5;                            // queued + healthy -> just waiting
-  if (isClearToLand(pr)) return 80;                 // ready + unqueued -> nudge a committer
-  if (pr.review_decision === "APPROVED" && ci === "success") return 60; // nearly ready
-  if ((pr.unresolved_threads || 0) > 0) return 40;  // may need your re-review
-  return 0;
+  return whoseMove(pr, opts).score;
 }
 
 function filterUnreadActivity(activity, since) {
@@ -177,5 +207,5 @@ function staleAgeLabel(ms) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, isClearToLand, isBroken, isActionable, computeTriageScore, isStale, staleAgeLabel };
+  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, isStale, staleAgeLabel };
 }

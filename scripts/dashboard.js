@@ -50,7 +50,26 @@ function escapeHtml(str) {
 
 const OVERRIDES_KEY = "dashboard-overrides";
 let DASHBOARD_USER = "";
-let DASHBOARD_MERGE_LABELS = ["to_be_merged"];
+let DASHBOARD_MERGE_LABELS = ["to-be-merged"];
+// Orgs / repos where the dashboard user can merge (config.json merge_access).
+// Turns "ready to merge" from "nudge a committer" into the user's own move.
+let DASHBOARD_MERGE_ACCESS = [];
+
+function triageOpts(type) {
+  return { mergeLabels: DASHBOARD_MERGE_LABELS, type, mergeAccess: DASHBOARD_MERGE_ACCESS };
+}
+
+// Hover text for the whose-move chip: one sentence saying who owes what.
+function moveTitle(move) {
+  switch (move.owner) {
+    case "me": return "Your move";
+    case "nobody": return "No human reviewer has engaged yet";
+    case "committer": return "Approved on the current head, green and mergeable — needs someone who can merge";
+    case "them": return "Someone else's move";
+    case "queued": return "Queued for merge by a maintainer";
+    default: return "Nothing for you to do here";
+  }
+}
 
 // Pick readable text color (black/white) for a GitHub label's hex background.
 function labelTextColor(hex) {
@@ -167,8 +186,8 @@ function renderPR(pr, type, moveBtn) {
   // if the rail clips under space pressure, the important ones stay visible.
   let ciDots = "";
   if (pr.ci_jobs && pr.ci_jobs.length > 0 && type !== "closed") {
-    const rank = { failure: 0, pending: 1, success: 2 };
-    const sorted = [...pr.ci_jobs].sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3));
+    const rank = { failure: 0, cancelled: 1, pending: 2, success: 3 };
+    const sorted = [...pr.ci_jobs].sort((a, b) => (rank[a.status] ?? 4) - (rank[b.status] ?? 4));
     ciDots = sorted.map(job => {
       const cls = `ci-dot ci-${job.status}`;
       const link = job.url ? ` href="${escapeAttr(job.url)}" target="_blank" rel="noopener"` : "";
@@ -176,22 +195,43 @@ function renderPR(pr, type, moveBtn) {
     }).join("");
   }
 
-  // Triage signal badges (review decision / CI / mergeable / threads).
-  // When fully clear, collapse to one composite chip; otherwise show specifics.
+  // Whose-move chip: the one chip that says what, if anything, this row wants
+  // from you. Followed by the specific state chips that explain it.
+  let moveChip = "";
   let signalBadges = "";
+  const move = type !== "closed" ? whoseMove(pr, triageOpts(type)) : null;
+  if (move && move.action && move.action !== "draft") { // the Draft badge already says it
+    let text = escapeHtml(move.action);
+    if (move.owner === "them" && move.who.length > 0) {
+      const names = move.who.map(w => w.startsWith("team:") ? w.slice(5) : `@${w}`).join(", ");
+      const since = daysOld(pr.last_push || pr.created);
+      text = `${text} ${escapeHtml(names)}${since > 0 ? ` · ${since}d` : ""}`;
+    }
+    const prefix = move.owner === "me" ? "→ " : move.owner === "nobody" ? "? " : "";
+    moveChip = `<span class="pr-badge badge-move badge-move-${move.owner}" title="${escapeAttr(moveTitle(move))}">${prefix}${text}</span>`;
+  }
   if (type !== "closed") {
     const parts = [];
     if (isClearToLand(pr)) {
       parts.push(`<span class="pr-badge badge-ready">✓ approved · green · mergeable</span>`);
     } else {
-      if (pr.review_decision === "APPROVED") parts.push(`<span class="pr-badge badge-approved">✓ approved</span>`);
-      else if (pr.review_decision === "CHANGES_REQUESTED") parts.push(`<span class="pr-badge badge-changes">✗ changes requested</span>`);
-      // Green is already conveyed by the CI dots — only chip CI when it's failing.
-      if (ciState(pr) === "failure") parts.push(`<span class="pr-badge badge-ci-fail">✗ CI failing</span>`);
+      if ((pr.approvals_current || 0) > 0) parts.push(`<span class="pr-badge badge-approved">✓ approved</span>`);
+      else if ((pr.approvals_stale || 0) > 0) parts.push(`<span class="pr-badge badge-approved" title="Approval predates the current head">✓ approved (older head)</span>`);
+      if ((pr.changes_requested || 0) > 0) parts.push(`<span class="pr-badge badge-changes">✗ changes requested</span>`);
+      // Green is already conveyed by the CI dots — only chip CI when it's not.
+      const ci = ciState(pr);
+      if (ci === "failure") parts.push(`<span class="pr-badge badge-ci-fail">✗ CI failing</span>`);
+      else if (ci === "cancelled") parts.push(`<span class="pr-badge badge-ci-cancelled">⊘ CI cancelled</span>`);
       if (pr.mergeable === "CONFLICTING") parts.push(`<span class="pr-badge badge-conflict">⚠ conflicts</span>`);
     }
-    if ((pr.unresolved_threads || 0) > 0) {
-      parts.push(`<span class="pr-badge badge-threads">${pr.unresolved_threads} unresolved</span>`);
+    if ((pr.threads_awaiting_me || 0) > 0) {
+      parts.push(`<span class="pr-badge badge-threads" title="Unresolved threads where the last word is not yours">${pr.threads_awaiting_me} awaiting you</span>`);
+    }
+    if ((pr.threads_awaiting_them || 0) > 0) {
+      parts.push(`<span class="pr-badge badge-threads-them" title="Unresolved threads where you spoke last">${pr.threads_awaiting_them} awaiting them</span>`);
+    }
+    if ((pr.threads_bot || 0) > 0) {
+      parts.push(`<span class="pr-badge badge-threads-bot" title="Unresolved threads where a bot spoke last">${pr.threads_bot} bot</span>`);
     }
     signalBadges = parts.join("");
   }
@@ -206,7 +246,9 @@ function renderPR(pr, type, moveBtn) {
     }
   });
 
-  const actionable = isActionable(pr, { mergeLabels: DASHBOARD_MERGE_LABELS, type });
+  // Dim rows that are someone else's move and have nothing new to read. Dim
+  // never means "nothing is wrong": a PR nobody has picked up stays bright.
+  const actionable = move ? move.actionable : false;
   const itemClass = (hasActivity && !hasUnread && !actionable) ? "pr-item pr-quiet" : "pr-item";
 
   return `<div class="${itemClass}">
@@ -215,7 +257,7 @@ function renderPR(pr, type, moveBtn) {
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(pr.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(pr.title)}</a>
-        ${badge}${staleBadge}${mergeLabelBadges}${signalBadges}${unreadBadge}
+        ${moveChip}${badge}${staleBadge}${mergeLabelBadges}${signalBadges}${unreadBadge}
         ${moveBtnHtml}
       </div>
       <div class="pr-meta">
@@ -334,6 +376,7 @@ Promise.all([
     }
     DASHBOARD_USER = data.github_user || config.github_user || "";
     if (Array.isArray(config.merge_labels)) DASHBOARD_MERGE_LABELS = config.merge_labels;
+    if (Array.isArray(config.merge_access)) DASHBOARD_MERGE_ACCESS = config.merge_access;
     const userLabel = data.github_user ? `@${data.github_user} • ` : "";
     const updatedLabel = data.updated ? `Updated ${formatDate(data.updated)}` : "Run the workflow to populate data";
     document.getElementById("subtitle").textContent = `${userLabel}${updatedLabel}`;
@@ -391,7 +434,7 @@ Promise.all([
       const repos = getSelectedRepos("repo-checkboxes-review");
       const sort = document.getElementById("filter-review-sort").value;
       let filtered = data.to_review.filter(pr => repos.has(pr.repo) && overrides[pr.url] !== "reviewed-open");
-      filtered = sortPRs(filtered, sort, { type: "review", mergeLabels: DASHBOARD_MERGE_LABELS });
+      filtered = sortPRs(filtered, sort, triageOpts("review"));
       document.getElementById("list-review").innerHTML = filtered.length
         ? filtered.map(pr => renderPR(pr, "review",
             `<button class="move-btn" data-url="${escapeAttr(pr.url)}" data-action="mark-reviewed">✓ Reviewed</button>`
@@ -410,7 +453,7 @@ Promise.all([
       const movedFromReview = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open" && repos.has(pr.repo));
       let filtered = (data.reviewed_open || []).filter(pr => repos.has(pr.repo));
       filtered = [...movedFromReview, ...filtered.filter(pr => !movedFromReview.some(m => m.url === pr.url))];
-      filtered = sortPRs(filtered, sort, { type: "reviewed-open", mergeLabels: DASHBOARD_MERGE_LABELS });
+      filtered = sortPRs(filtered, sort, triageOpts("reviewed-open"));
       document.getElementById("list-reviewed-open").innerHTML = filtered.length
         ? filtered.map(pr => {
             const isManual = overrides[pr.url] === "reviewed-open";
@@ -430,7 +473,7 @@ Promise.all([
       const repos = getSelectedRepos("repo-checkboxes-open");
       const sort = document.getElementById("filter-open-sort").value;
       let filtered = data.open_prs.filter(pr => repos.has(pr.repo));
-      filtered = sortPRs(filtered, sort, { type: "open", mergeLabels: DASHBOARD_MERGE_LABELS });
+      filtered = sortPRs(filtered, sort, triageOpts("open"));
       document.getElementById("list-open").innerHTML = filtered.length
         ? filtered.map(pr => renderPR(pr, "open")).join("")
         : `<div class="loading">No PRs match the filter</div>`;

@@ -26,40 +26,74 @@ Other features:
 
 ## Triage
 
-Your in-flight PRs (**Working On** and **Reviewed (Open)**) are enriched via
-the GitHub GraphQL API with the signals that tell you *where the ball is*:
+Your in-flight PRs (**Needs Your Review**, **Reviewed (Open)** and **Working
+On**) are enriched via the GitHub GraphQL API, and every row carries one chip
+that says *whose move it is*, relative to you:
 
-- **Review decision** — ✓ approved / ✗ changes requested
-- **Mergeable state** — ⚠ conflicts when a rebase is needed
-- **Unresolved review threads** — count of open conversations
-- **CI** — per-job status dots, summarized as green / failing
+| Chip | Meaning |
+|---|---|
+| **→ fix CI / rebase / reply in N threads / re-review / merge …** | Your move. The row stays bright until you act. |
+| **? find a reviewer** | Nobody has engaged: no review, no review request. Also your move, and the easiest one to forget. |
+| **nudge a committer** | Approved on the current head, green and mergeable, but you can't merge here. |
+| **waiting on @name · Nd** | Their move: a reviewer owes a look (requested, or their verdict predates the head, or you answered their thread last). Dimmed. |
+| **author's move** | On a PR you reviewed: CI red, conflicts, or changes requested. Dimmed. |
+| **queued for merge** | Carries a merge label and is healthy. Dimmed. |
 
-When a PR is fully clear these collapse into one composite chip —
-`✓ approved · green · mergeable` — otherwise the specific state chips show.
+Beside it, the specific state chips: ✓ approved (or *approved (older head)*),
+✗ changes requested, ✗ CI failing, ⊘ CI cancelled, ⚠ conflicts, and the
+unresolved threads split into *N awaiting you* / *N awaiting them* / *N bot*.
+CI is also shown as per-job dots.
 
-These feed a **Triage (needs action)** sort, the default on the *Needs
-Review*, *Reviewed (Open)*, and *Working On* tabs (chronological sorts remain
-as options). It ranks by urgency:
+### Why not GitHub's own fields?
 
-1. Queued for merge but broken (CI red / conflict)
-2. CI failing
-3. Changes requested
-4. Merge conflict
-5. Unresolved review threads
-6. Ready to land but not yet queued (nudge a maintainer)
-7. Stale review request (> 7 days)
+GitHub's aggregate fields are sticky across pushes. `reviewDecision` stays
+`APPROVED` or `CHANGES_REQUESTED` after the author pushes new commits, and a
+review thread stays unresolved until a reviewer clicks *resolve*, no matter who
+spoke last. Read naively, that labels a PR you need to re-review as "author's
+move" and a PR whose approval is three pushes old as "ready to merge".
 
-PRs with nothing actionable *and* no new activity are dimmed; anything
-needing action stays highlighted even when quiet.
+So the dashboard derives the turn itself:
 
-## Merge labels
+- **Per-reviewer verdicts against the head commit.** Each reviewer's latest
+  APPROVED / CHANGES_REQUESTED carries the commit it was given on; a verdict on
+  an older head is *stale*, which means that reviewer owes another look and the
+  approval no longer clears the PR.
+- **Per-thread last word.** An unresolved thread awaits whoever did *not* speak
+  last. On your own PR every thread counts; on someone else's only threads you
+  opened are yours. A thread whose last word is a bot's is counted apart.
+- **Review requests** without a current-head verdict put the first look in that
+  person's court.
+- **CI** combines the per-job check-runs with the commit's status rollup, so a
+  failed commit status (e.g. DCO) is seen, and a *cancelled* lane is reported as
+  such rather than as green or as a failure.
+
+Time is shown (`· 12d`) but is never an input to whose move it is.
+
+These feed the **Triage (needs action)** sort, the default on the three tabs
+(chronological sorts remain as options). The ladder differs by tab because your
+relationship to the PR differs:
+
+- **Working On** (you are the author): queued-but-broken > CI failing >
+  changes requested > conflicts > threads awaiting you > find a reviewer > ready
+  to land > cancelled CI > queued > waiting on a reviewer.
+- **Reviewed (Open)** (you reviewed): review requested of you > author replied
+  in your thread > *author's move if broken* > re-review after a push > re-check
+  a stale approval > re-look after a comment-only review > merge (or nudge) >
+  waiting on others.
+- **Needs Your Review**: your review, unless the author has CI or conflicts to
+  fix first; a request older than 7 days is bumped.
+
+## Merge labels and merge access
 
 Set `merge_labels` in `config.json` to flag PRs a maintainer has queued for
-merge (e.g. Valkey's `to_be_merged`). Matching labels render in their real
-GitHub color and feed the triage ranking — kept visually and semantically
-distinct from the mechanical readiness signal above. A PR that is mechanically
-ready but *not* yet labelled sorts as "nudge a maintainer"; one that is
-labelled *and* healthy sinks to the bottom ("just waiting").
+merge (e.g. Valkey's `to-be-merged`). Matching labels render in their real
+GitHub color and feed the triage ranking: a PR that is mechanically ready but
+*not* yet labelled is a nudge; one that is labelled *and* healthy sinks to the
+bottom ("just waiting").
+
+Set `merge_access` to the orgs (`"valkey-io"`) or repos (`"valkey-io/valkey"`)
+where *you* can merge. There, a ready PR becomes **→ merge**, your own move,
+instead of **nudge a committer**.
 
 ## Fork & Personalize
 
@@ -75,7 +109,8 @@ labelled *and* healthy sinks to the bottom ("just waiting").
    {
      "orgs": ["your-org"],
      "title": "PR Dashboard",
-     "merge_labels": ["to_be_merged"]
+     "merge_labels": ["to-be-merged"],
+     "merge_access": ["valkey-io"]
    }
    ```
    `merge_labels` is optional — list any repo labels your project uses to mark
@@ -91,7 +126,7 @@ Multiple orgs are fully supported — data from all orgs is merged into a single
 ## How It Works
 
 ```
-config.json          ← your org + preferences (incl. merge_labels)
+config.json          ← your org + preferences (merge_labels, merge_access)
 scripts/fetch-prs.js ← queries GitHub Search + GraphQL APIs, writes data/prs.json
 data/prs.json        ← all PR/issue data + triage signals (refreshed at deploy time)
 index.html           ← single-page dashboard (fetches data/prs.json)
