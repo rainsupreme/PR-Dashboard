@@ -211,7 +211,7 @@ function renderPR(pr, type, moveBtn) {
 
   return `<div class="${itemClass}">
     <img class="pr-avatar" src="${escapeAttr(pr.avatar)}" alt="" loading="lazy">
-    <span class="pr-number"><span class="hash">#</span>${pr.number}</span>
+    <span class="pr-number">${pr.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(pr.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(pr.title)}</a>
@@ -240,7 +240,7 @@ function renderMention(item) {
 
   return `<div class="pr-item">
     <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
-    <span class="pr-number"><span class="hash">#</span>${item.number}</span>
+    <span class="pr-number">${item.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
@@ -260,7 +260,7 @@ function renderIssue(item) {
   const itemClass = (hasActivity && !hasUnread) ? "pr-item pr-quiet" : "pr-item";
   return `<div class="${itemClass}">
     <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
-    <span class="pr-number"><span class="hash">#</span>${item.number}</span>
+    <span class="pr-number">${item.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
