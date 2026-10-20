@@ -27,6 +27,7 @@ Displays:
 - **Daily refresh via GitHub Actions** — cron at `0 16 * * *` (9 AM PDT), also on push and manual dispatch
 - **Future-proofed `data/` directory** — additional data files can be added later
 - **No external dependencies** — no frameworks, no CDN calls
+- **Self-hosted font** — `fonts/BigShouldersDisplay-Bold.woff2` (OFL, latin subset) for the PR-number column; no webfont CDN
 - **Dark mode** — respects `prefers-color-scheme`
 - **Mobile responsive** — stat cards stack on narrow viewports
 
