@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const {
   ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, sortPRs,
 } = require("../scripts/utils.js");
-const { mapSignals, mapPR } = require("../scripts/fetch-prs.js");
+const { mapSignals, mapPR, dedupeMentions, mentionAnchor } = require("../scripts/fetch-prs.js");
 
 const MERGE = ["to-be-merged"];
 const ME = "rainsupreme";
@@ -426,6 +426,46 @@ describe("countActionable: the stat card's big number", () => {
   it("an incoming review request counts unless the author is blocked", () => {
     const o = { type: "review" };
     assert.equal(countActionable([pr({}), pr({ ci_jobs: jobs("failure") }), pr({ mergeable: "CONFLICTING" })], o), 1);
+  });
+});
+
+describe("dedupeMentions", () => {
+  it("drops mentions already shown on another tab, keeps the rest in order", () => {
+    const m = [{ url: "u/1" }, { url: "u/2" }, { url: "u/3" }];
+    assert.deepEqual(dedupeMentions(m, [{ url: "u/2" }], [], [{ url: "u/9" }]), [{ url: "u/1" }, { url: "u/3" }]);
+    assert.deepEqual(dedupeMentions(m), m);
+  });
+});
+
+describe("mentionAnchor: where unread starts for a mention", () => {
+  const c = (author, body, created_at) => ({ author, body, created_at });
+  it("starts one second before the comment that mentioned you, so the mention is new", () => {
+    const a = [c("bob", "hi", "2026-10-01T10:00:00Z"), c("bob", "ping @rain", "2026-10-02T10:00:00Z"), c("eve", "later", "2026-10-03T10:00:00Z")];
+    assert.equal(mentionAnchor(a, "rain", "2026-09-01T00:00:00Z"), "2026-10-02T09:59:59.000Z");
+  });
+  it("moves to your reply once you answered after the mention", () => {
+    const a = [c("bob", "ping @rain", "2026-10-02T10:00:00Z"), c("rain", "done", "2026-10-02T11:00:00Z"), c("bob", "thanks", "2026-10-02T12:00:00Z")];
+    assert.equal(mentionAnchor(a, "rain", ""), "2026-10-02T11:00:00Z");
+  });
+  it("a reply from before the mention does not count as answering it", () => {
+    const a = [c("rain", "early", "2026-10-01T10:00:00Z"), c("bob", "ping @Rain", "2026-10-02T10:00:00Z")];
+    assert.equal(mentionAnchor(a, "rain", ""), "2026-10-02T09:59:59.000Z");
+  });
+  it("uses the latest mention when mentioned more than once", () => {
+    const a = [c("bob", "@rain one", "2026-10-02T10:00:00Z"), c("rain", "ok", "2026-10-02T11:00:00Z"), c("eve", "@rain again", "2026-10-05T10:00:00Z")];
+    assert.equal(mentionAnchor(a, "rain", ""), "2026-10-05T09:59:59.000Z");
+  });
+  it("falls back to creation when the mention is in the body, not a comment", () => {
+    assert.equal(mentionAnchor([c("bob", "no handle", "2026-10-02T10:00:00Z")], "rain", "2026-09-01T00:00:00Z"), "2026-09-01T00:00:00Z");
+    assert.equal(mentionAnchor([], "rain", ""), "");
+  });
+  it("matches the whole handle only: @rain-bot is not @rain", () => {
+    const a = [c("bob", "thanks @rain-bot", "2026-10-02T10:00:00Z")];
+    assert.equal(mentionAnchor(a, "rain", "2026-09-01T00:00:00Z"), "2026-09-01T00:00:00Z");
+  });
+  it("does not treat your own comment containing your handle as a mention", () => {
+    const a = [c("rain", "cc @rain-bot and @rain", "2026-10-02T10:00:00Z")];
+    assert.equal(mentionAnchor(a, "rain", "2026-09-01T00:00:00Z"), "2026-10-02T10:00:00Z");
   });
 });
 

@@ -106,6 +106,9 @@ function getUnreadActivity(pr, githubUser) {
   let since;
   if (markers[pr.url]) {
     since = markers[pr.url];
+  } else if (pr.unread_anchor) {
+    // Mentions: the fetch already decided where "new" starts (the mention, or your reply to it)
+    since = pr.unread_anchor;
   } else if (githubUser && pr.author !== githubUser) {
     // Others' PRs: anchor to my last interaction, or PR creation if never interacted
     since = pr.my_last_interaction || pr.created;
@@ -279,20 +282,25 @@ function renderMention(item) {
     : `<span class="pr-badge badge-mention-issue">Issue</span>`;
   const age = daysOld(item.updated);
   const staleBadge = age > 7 ? `<span class="pr-badge badge-stale">${age}d ago</span>` : "";
+  const { hasActivity, hasUnread, unreadBadge, activitySection, toggleBtn } = buildActivity(item, "issue");
+  // A mention you have answered (or marked read) is someone else's move: dim it.
+  const itemClass = (hasActivity && !hasUnread) ? "pr-item pr-quiet" : "pr-item";
 
-  return `<div class="pr-item">
+  return `<div class="${itemClass}">
     <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
     <span class="pr-number">${item.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
-        ${typeBadge}${staleBadge}
+        ${typeBadge}${staleBadge}${unreadBadge}
       </div>
       <div class="pr-meta">
         <span class="pr-repo">${escapeHtml(item.repo)}</span>
         <span>@${escapeHtml(item.author)}</span>
         <span>updated ${timeAgo(item.updated)}</span>
+        ${toggleBtn}
       </div>
+      ${activitySection}
     </div>
   </div>`;
 }
@@ -402,7 +410,7 @@ Promise.all([
     });
 
     // Prune read markers for PRs no longer in any open list
-    const allOpenUrls = new Set([...data.to_review, ...data.open_prs, ...(data.reviewed_open || []), ...(data.issues || [])].map(pr => pr.url));
+    const allOpenUrls = new Set([...data.to_review, ...data.open_prs, ...(data.reviewed_open || []), ...(data.issues || []), ...(data.mentions || [])].map(pr => pr.url));
     const staleMarkers = getReadMarkers();
     Object.keys(staleMarkers).forEach(url => {
       if (!allOpenUrls.has(url)) { delete staleMarkers[url]; }
@@ -434,8 +442,8 @@ Promise.all([
       setCard("review", mine.review, mine.review > 0, `your move\n${review.length} open`);
       setCard("reviewed-open", mine["reviewed-open"], mine["reviewed-open"] > 0, `your move\n${reviewedOpen.length} open`);
       setCard("open", mine.open, mine.open > 0, `your move\n${data.open_prs.length} open`);
-      // Mentions carry no activity feed, so there is no unread to light them by.
-      setCard("mentions", data.counts.mentions || 0, false, "open");
+      const newMentions = unreadCount(data.mentions);
+      setCard("mentions", newMentions, newMentions > 0, `new\n${(data.mentions || []).length} open`);
       const newIssues = unreadCount(data.issues);
       setCard("issues", newIssues, newIssues > 0, `new\n${(data.issues || []).length} open`);
       setCard("reviewed", data.counts.reviewed_by || 0, false, "");
@@ -633,7 +641,7 @@ Promise.all([
       if (markBtn) {
         e.stopPropagation();
         setReadMarker(markBtn.dataset.url);
-        updateCards(); renderReview(); renderReviewedOpen(); renderOpen(); renderIssues();
+        updateCards(); renderReview(); renderReviewedOpen(); renderOpen(); renderMentions(); renderIssues();
         return;
       }
     });

@@ -12,8 +12,8 @@ Displays:
 The stat cards' tab labels are To Review / Reviewing / Authored / Mentions /
 Issues / Reviewed / Done; the count is set in the self-hosted Big Shoulders
 Display (`fonts/`). The cards are a dark board: the big number is the tab's
-*your move* count (`countActionable()` in `scripts/utils.js`; unread for Issues;
-the plain total for Mentions, Reviewed and Done), the caption holds the total,
+*your move* count (`countActionable()` in `scripts/utils.js`; unread for Issues
+and Mentions; the plain total for Reviewed and Done), the caption holds the total,
 and `updateCards()` in `scripts/dashboard.js` toggles a `lit` class only while
 the number is above zero. Color applies only to lit cards (see README).
 
@@ -61,6 +61,13 @@ flat turn-aware fields (`waiting_on`, `approvals_current`, `approvals_stale`,
 `changes_requested`, `threads_awaiting_me`, `my_review`, `my_review_stale`,
 `my_last_look`, ...); `whoseMove()` in `scripts/utils.js` ranks them per tab.
 GitHub's `reviewDecision` is kept for display only: it is sticky across pushes.
+
+Mentions come from one `mentions:<user> is:open` search per org. `dedupeMentions()`
+drops any already on To Review / Reviewing / Authored / Issues, and the survivors
+get issue-comment activity; `mentionAnchor()` sets `unread_anchor` to your latest
+reply after the mention, else one second before the mentioning comment, else the
+item's creation (body mentions). `getUnreadActivity()` in `scripts/dashboard.js`
+honors `unread_anchor` ahead of its author-based defaults.
 
 ## Setup
 
