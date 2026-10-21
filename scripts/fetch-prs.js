@@ -721,11 +721,11 @@ async function enrichWithActivity(prs, label) {
   console.log(`\n  Fetching activity for ${prs.length} ${label} PRs...`);
   const enriched = [];
   for (const pr of prs) {
-    const { last_push, activity, ci_jobs } = await fetchActivity(pr);
+    const { last_push, activity, ci_jobs, bot_verdict } = await fetchActivity(pr);
     // Find the most recent activity event by the dashboard user (reviews, comments, review-comments)
     const myEvents = activity.filter(a => a.author === GITHUB_USER && a.type !== "commit");
     const my_last_interaction = myEvents.length > 0 ? myEvents[0].created_at : "";
-    enriched.push({ ...pr, last_push, activity, ci_jobs, my_last_interaction });
+    enriched.push({ ...pr, last_push, activity, ci_jobs, bot_verdict, my_last_interaction });
   }
   return enriched;
 }
