@@ -1,7 +1,7 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, sortPRs,
+  ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, normalizeMarker, myLastAction, pinStillHolds, sortPRs,
 } = require("../scripts/utils.js");
 const { mapSignals, mapPR, dedupeMentions, mentionAnchor } = require("../scripts/fetch-prs.js");
 
@@ -466,6 +466,49 @@ describe("mentionAnchor: where unread starts for a mention", () => {
   it("does not treat your own comment containing your handle as a mention", () => {
     const a = [c("rain", "cc @rain-bot and @rain", "2026-10-02T10:00:00Z")];
     assert.equal(mentionAnchor(a, "rain", "2026-09-01T00:00:00Z"), "2026-10-02T10:00:00Z");
+  });
+});
+
+describe("local marks: normalizeMarker", () => {
+  it("accepts the old bare-timestamp shape and the new object shape", () => {
+    assert.deepEqual(normalizeMarker("2026-10-01T00:00:00Z"), { read_at: "2026-10-01T00:00:00Z" });
+    assert.deepEqual(normalizeMarker({ read_at: "a", pinned_at: "b" }), { read_at: "a", pinned_at: "b" });
+    assert.deepEqual(normalizeMarker({ pinned_at: "b", junk: 1 }), { pinned_at: "b" });
+    assert.deepEqual(normalizeMarker(null), {});
+  });
+});
+
+describe("local marks: pins clear on your own action only", () => {
+  const act = (author, created_at, type = "comment") => ({ author, created_at, type });
+  it("myLastAction is your latest comment/review/commit, or your push on your own PR", () => {
+    const pr = { author: "bob", activity: [act("rain", "2026-10-02T00:00:00Z"), act("bob", "2026-10-05T00:00:00Z"), act("rain", "2026-10-03T00:00:00Z", "review")] };
+    assert.equal(myLastAction(pr, "rain"), "2026-10-03T00:00:00Z");
+    assert.equal(myLastAction({ author: "rain", last_push: "2026-10-09T00:00:00Z", activity: [] }, "rain"), "2026-10-09T00:00:00Z");
+    assert.equal(myLastAction({ author: "bob", last_push: "2026-10-09T00:00:00Z", activity: [] }, "rain"), "");
+  });
+  it("holds while only other people act", () => {
+    const pr = { author: "bob", activity: [act("bob", "2026-10-06T00:00:00Z"), act("eve", "2026-10-07T00:00:00Z")] };
+    assert.equal(pinStillHolds({ pinned_at: "2026-10-05T00:00:00Z" }, pr, "rain"), true);
+  });
+  it("clears once you act after pinning, not before", () => {
+    const before = { author: "bob", activity: [act("rain", "2026-10-04T00:00:00Z")] };
+    const after = { author: "bob", activity: [act("rain", "2026-10-06T00:00:00Z")] };
+    assert.equal(pinStillHolds({ pinned_at: "2026-10-05T00:00:00Z" }, before, "rain"), true);
+    assert.equal(pinStillHolds({ pinned_at: "2026-10-05T00:00:00Z" }, after, "rain"), false);
+  });
+  it("is false for an unpinned marker", () => {
+    assert.equal(pinStillHolds({ read_at: "2026-10-05T00:00:00Z" }, { activity: [] }, "rain"), false);
+    assert.equal(pinStillHolds(undefined, { activity: [] }, "rain"), false);
+  });
+});
+
+describe("countActionable with pins", () => {
+  it("adds pinned rows and counts a pinned actionable row once", () => {
+    const o = { mergeLabels: MERGE, type: "open" };
+    const prs = [pr({ ci_jobs: jobs("failure"), url: "u/1" }), pr({ waiting_on: ["alice"], url: "u/2" }), pr({ waiting_on: ["alice"], url: "u/3" })];
+    const pinned = new Set(["u/1", "u/2"]);
+    assert.equal(countActionable(prs, o), 1);
+    assert.equal(countActionable(prs, o, p => pinned.has(p.url)), 2);
   });
 });
 

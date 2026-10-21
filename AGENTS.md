@@ -69,6 +69,18 @@ reply after the mention, else one second before the mentioning comment, else the
 item's creation (body mentions). `getUnreadActivity()` in `scripts/dashboard.js`
 honors `unread_anchor` ahead of its author-based defaults.
 
+Local marks live in localStorage under `dashboard-read-markers` as
+`{ url: { read_at, pinned_at } }` (`normalizeMarker()` also accepts the older
+bare-timestamp value). `rowRail()` renders the per-row controls (tab move, read/
+unread, pin); a document-level click handler applies them and re-renders every
+tab. `pinStillHolds()` clears a pin once `myLastAction()` (the user's latest
+comment/review/commit, or push on their own PR) is later than `pinned_at`; the
+prune pass at load applies it and drops marks for closed items. `countActionable()`
+takes an `isPinned` predicate so pinned rows light the card. Below 600px `.pr-item`
+switches to a grid (`ava num title rail` header row, then chips/meta/ci/activity
+full-width) with `.pr-content`/`.pr-title-row` as `display: contents`, so the row
+markup is the same at every width.
+
 ## Setup
 
 1. Push this repo to GitHub

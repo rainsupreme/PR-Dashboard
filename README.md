@@ -56,6 +56,17 @@ that says *whose move it is*, relative to you:
 | **author's move** | On a PR you reviewed: CI red, conflicts, or changes requested. Dimmed. |
 | **queued for merge** | Carries a merge label and is healthy. Dimmed. |
 
+Every in-flight row also has a small **rail** on its right edge with the row's
+manual controls, in the same place at every width: move to Reviewing (✓ / ↩
+on the review tabs), **mark read** (✓, or ↩ to mark unread again) and **pin** (⚑).
+A read mark is a statement about the past: new activity after it shows as new
+again. A pin is a promise to act: the row stays bright, gets a bar on its left
+edge and a flag on the avatar, counts toward the card's lit number, and clears
+only when *you* act on the item (comment, review, push) or it closes. Both are
+stored in your browser (localStorage), so they are per device; the reset button
+in the header clears them along with the tab moves. On phones the avatar, number
+and title form a header row and the chips, meta and rail flow beneath.
+
 Beside it, the specific state chips: ✓ approved (or *approved (older head)*),
 ✗ changes requested, ✗ CI failing, ⊘ CI cancelled, ⚠ conflicts, and the
 unresolved threads split into *N awaiting you* / *N awaiting them* / *N bot*.
