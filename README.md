@@ -142,6 +142,30 @@ note saying why); that is the one action the author and other reviewers can
 see, and the dashboard follows it on the next fetch. There is no local "mark
 reviewed".
 
+## Merger row
+
+When `merge_access` names repos you can merge in, a second row of cards appears
+above your own, for the duties only someone with merge rights can do across the
+whole project. Each card is a dark-board count over every open PR in those repos:
+
+| Card | Counts |
+|---|---|
+| **Let CI Run** | first-time contributors whose workflow runs await approval in the Actions tab, with whether the PR touches `.github/` |
+| **Needs a Maintainer** | PRs reviewed only by people without write access; no committer has reviewed, commented or been requested |
+| **To Land** | approved by a committer on the current head, green, mergeable, and still unmerged a week later |
+| **To Unstick** | committer-approved but conflicting or red, or changes requested and the author quiet for a month |
+| **Queued** | carrying a merge label; lit only when one of them is broken |
+| **Merged** | every PR you have merged there, all time, with the month you started |
+
+Each PR lands in at most one of the first five, oldest first, with a chip saying
+why. Who counts as a committer comes from the repo's collaborator list when the
+token can read it, plus everyone who has ever merged a PR there (public, and the
+same set over time). Rules live in `scripts/merger.js`; no model is involved.
+
+The Merged counter is incremental: the first run walks the merge history once,
+later runs fetch only merges since the last one. The cache (`data/merger-cache.json`)
+ships with the site and is read back from Pages on the next refresh.
+
 ## Merge labels and merge access
 
 Set `merge_labels` in `config.json` to flag PRs a maintainer has queued for
@@ -150,9 +174,10 @@ GitHub color and feed the triage ranking: a PR that is mechanically ready but
 *not* yet labelled is a nudge; one that is labelled *and* healthy sinks to the
 bottom ("just waiting").
 
-Set `merge_access` to the orgs (`"valkey-io"`) or repos (`"valkey-io/valkey"`)
-where *you* can merge. There, a ready PR becomes **→ merge**, your own move,
-instead of **nudge a committer**.
+Set `merge_access` to the repos (`"valkey-io/valkey"`) where *you* can merge,
+or a bare org (`"valkey-io"`) if that is every repo in it. There, a ready PR
+becomes **→ merge**, your own move, instead of **nudge a committer**, and the
+merger row above covers exactly those repos.
 
 ## Fork & Personalize
 
@@ -169,11 +194,15 @@ instead of **nudge a committer**.
      "orgs": ["your-org"],
      "title": "PR Dashboard",
      "merge_labels": ["to-be-merged"],
-     "merge_access": ["valkey-io"]
+     "merge_access": ["your-org/your-repo"]
    }
    ```
    `merge_labels` is optional — list any repo labels your project uses to mark
    PRs as queued for merge. Leave it out (or empty) to disable label flagging.
+   `merge_access` is optional too — list the repos where you can merge, one
+   `owner/repo` each. A bare org (`"your-org"`) means every repo in it, which is
+   only right if you can merge org-wide; it also makes the merger fetch cover
+   every one of them.
 5. Push — the workflow deploys your personalized dashboard automatically
 
 That's it. Your dashboard will be live at `https://<username>.github.io/PersonalDashboard/`
