@@ -9,8 +9,8 @@ Displays:
 - Your open/in-progress PRs
 - Done (merged/closed) PRs with filtering
 
-The stat cards' tab labels are To Review / Reviewing / Authored / Mentions /
-Issues / Reviewed / Done; the count is set in the self-hosted Big Shoulders
+The stat cards' tab labels are To Review / To Follow Up / To Unblock / Unread
+Mentions / Unread Issues / Reviewed / Done (each names what its big number counts); the count is set in the self-hosted Big Shoulders
 Display (`fonts/`). The cards are a dark board: the big number is the tab's
 *your move* count (`countActionable()` in `scripts/utils.js`; unread for Issues
 and Mentions; the plain total for Reviewed and Done), the caption holds the total,

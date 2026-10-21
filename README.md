@@ -30,17 +30,21 @@ Other features:
 ## Triage
 
 The stat cards work like a dark board: a card's big number is what that tab
-wants from you, and it is grey until that number is above zero. **To Review**,
-**Reviewing** and **Authored** count the PRs that are *your move* (see the chips
-below), **Issues** counts unread activity, and the tab's total sits in the
-caption (`15 open`). A lit card means act; a row of grey numbers
+wants from you, and it is grey until that number is above zero, so each card
+reads as a sentence (`0 To Unblock · 19 PRs open`). **To Review** counts review
+requests you can act on now; **To Follow Up** counts PRs you reviewed that are
+*your move* again (a re-review, a reply, a stale approval to re-check, a merge);
+**To Unblock** counts your own PRs that are waiting on you (CI, conflicts,
+requested changes, a reply, a reviewer to find, a merge); **Unread Mentions** and
+**Unread Issues** count unread activity. The tab's total sits in the caption
+(`15 PRs open`). A lit card means act; a row of grey numbers
 means nothing is waiting on you. **Mentions** lists only items not already on
 another tab, and counts as new everything since the comment that mentioned you
 (or since your reply to it). **Reviewed** and **Done** are history and never light up.
 The lit color says which hat: yellow = act now, blue = your reviewer hat,
 green = your author hat, purple = peripheral.
 
-Your in-flight PRs (**To Review**, **Reviewing** and **Authored**) are enriched via the GitHub GraphQL API, and every row carries one chip
+Your in-flight PRs (**To Review**, **To Follow Up** and **To Unblock**) are enriched via the GitHub GraphQL API, and every row carries one chip
 that says *whose move it is*, relative to you:
 
 | Chip | Meaning |
