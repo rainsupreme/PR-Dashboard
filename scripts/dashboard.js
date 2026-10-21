@@ -421,22 +421,28 @@ function fetchData() {
 }
 
 // The page polls data/prs.json while open. A new `updated` means a deploy
-// landed; past this age with none, the refresh pipeline (timer or workflow)
-// has stopped and the banner says so.
+// landed. The header always shows how old the data is; the banner is the
+// alarm for "the refresh pipeline has stopped", so its threshold follows the
+// configured cadence (config.json `stale_after_minutes`). The default covers
+// the schedule-only install: GitHub stretches the hourly cron to 3-6 h on
+// quiet repos, and that is normal, not a stall.
 const REFRESH_POLL_MS = 2 * 60 * 1000;
-const STALE_MS = 45 * 60 * 1000;
+const AGE_TICK_MS = 30 * 1000;
+const DEFAULT_STALE_AFTER_MINUTES = 6 * 60;
+let STALE_MS = DEFAULT_STALE_AFTER_MINUTES * 60 * 1000;
 let currentUpdated = "";
 let staleDismissedFor = "";
 
-// Header line and stale banner, re-run on every poll so an open tab ages
-// honestly even when no new data arrives. Dismissing the banner holds until
-// the next deploy, which is also when it would clear on its own.
+// Header line and stale banner, re-run on every poll and age tick so an open
+// tab ages honestly even when no new data arrives. Dismissing the banner holds
+// until the next deploy, which is also when it would clear on its own.
 function updateFreshness(data) {
   currentUpdated = data.updated || "";
   const userLabel = data.github_user ? `@${data.github_user} • ` : "";
   // Refreshes are minutes apart, so the time matters, not just the date.
   const when = data.updated ? new Date(data.updated).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
-  const updatedLabel = data.updated ? `Updated ${when}` : "Run the workflow to populate data";
+  const age = data.updated ? dataAgeLabel(Date.now() - new Date(data.updated).getTime()) : "";
+  const updatedLabel = data.updated ? `Updated ${when}${age ? ` (${age})` : ""}` : "Run the workflow to populate data";
   document.getElementById("subtitle").textContent = `${userLabel}${updatedLabel}`;
 
   const banner = document.getElementById("stale-banner");
@@ -470,6 +476,7 @@ Promise.all([
     DASHBOARD_USER = data.github_user || config.github_user || "";
     if (Array.isArray(config.merge_labels)) DASHBOARD_MERGE_LABELS = config.merge_labels;
     if (Array.isArray(config.merge_access)) DASHBOARD_MERGE_ACCESS = config.merge_access;
+    if (Number.isFinite(config.stale_after_minutes) && config.stale_after_minutes > 0) STALE_MS = config.stale_after_minutes * 60 * 1000;
     updateFreshness(data);
 
     let reviewing = data.reviewing || [];
@@ -752,6 +759,7 @@ Promise.all([
       }
     }
     setInterval(pollForUpdate, REFRESH_POLL_MS);
+    setInterval(() => updateFreshness(data), AGE_TICK_MS);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") pollForUpdate();
     });

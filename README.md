@@ -265,8 +265,13 @@ regardless, bounding anything that fails to bump `updated_at`.
 
 The page polls `data/prs.json` every 2 minutes while open (and when the tab
 becomes visible) and swaps new data in place; filters, pins, open activity
-sections and scroll position survive. The stale banner appears when the data
-is more than 45 minutes old, which means the timer or the workflow stopped.
+sections and scroll position survive. The header always shows the data's age
+("Updated Oct 21, 02:23 PM (12 min ago)"), ticking every 30 s. The stale
+banner is the alarm for a stopped pipeline, so its threshold follows your
+cadence: `stale_after_minutes` in `config.json`, 45 here (three missed
+15-minute fires). Leave it unset without the timer: the default is 6 hours,
+because GitHub stretching the hourly schedule to 3-6 hours is normal, not a
+stall.
 
 ## Local Development
 

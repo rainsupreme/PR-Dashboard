@@ -4,6 +4,7 @@
     "valkey-io"
   ],
   "title": "PR Dashboard",
+  "stale_after_minutes": 45,
   "merge_labels": [
     "to-be-merged"
   ],

@@ -260,6 +260,18 @@ function staleAgeLabel(ms) {
   return `${Math.floor(ms / 86400000)}d`;
 }
 
+// Age of the data for the header, always shown (e.g. "just now", "12 min ago",
+// "2h 05m ago", "3d ago").
+function dataAgeLabel(ms) {
+  if (!(ms >= 0)) return "";
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours}h ${String(min % 60).padStart(2, "0")}m ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, normalizeMarker, myLastAction, pinStillHolds, isStale, staleAgeLabel };
+  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, normalizeMarker, myLastAction, pinStillHolds, isStale, staleAgeLabel, dataAgeLabel };
 }
