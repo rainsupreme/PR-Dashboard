@@ -8,6 +8,16 @@
     "to-be-merged"
   ],
   "merge_access": [
-    "valkey-io"
+    "valkey-io/valkey",
+    "valkey-io/valkey-io.github.io",
+    "valkey-io/valkey-container",
+    "valkey-io/valkey-rfc",
+    "valkey-io/valkey-json",
+    "valkey-io/valkey-release-automation",
+    "valkey-io/valkey-try-me",
+    "valkey-io/valkey-bundle",
+    "valkey-io/valkey-perf-benchmark",
+    "valkey-io/valkey-developer-resources",
+    "valkey-io/valkey-ci-agent"
   ]
 }
