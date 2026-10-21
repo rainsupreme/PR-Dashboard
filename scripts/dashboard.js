@@ -240,7 +240,9 @@ function renderPR(pr, type) {
     const prefix = move.owner === "me" ? "→ " : move.owner === "nobody" ? "? " : "";
     moveChip = `<span class="pr-badge badge-move badge-move-${move.owner}" title="${escapeAttr(moveTitle(move))}">${prefix}${text}</span>`;
   }
-  if (type !== "closed") {
+  // Merger rows skip them: the reason chip already names the approval, CI and
+  // conflict state, and their lean signals carry no thread counts.
+  if (type !== "closed" && type !== "merger") {
     const parts = [];
     if (isClearToLand(pr)) {
       parts.push(`<span class="pr-badge badge-ready">✓ approved · green · mergeable</span>`);

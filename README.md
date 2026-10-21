@@ -174,9 +174,10 @@ GitHub color and feed the triage ranking: a PR that is mechanically ready but
 *not* yet labelled is a nudge; one that is labelled *and* healthy sinks to the
 bottom ("just waiting").
 
-Set `merge_access` to the orgs (`"valkey-io"`) or repos (`"valkey-io/valkey"`)
-where *you* can merge. There, a ready PR becomes **→ merge**, your own move,
-instead of **nudge a committer**.
+Set `merge_access` to the repos (`"valkey-io/valkey"`) where *you* can merge,
+or a bare org (`"valkey-io"`) if that is every repo in it. There, a ready PR
+becomes **→ merge**, your own move, instead of **nudge a committer**, and the
+merger row above covers exactly those repos.
 
 ## Fork & Personalize
 
@@ -193,11 +194,15 @@ instead of **nudge a committer**.
      "orgs": ["your-org"],
      "title": "PR Dashboard",
      "merge_labels": ["to-be-merged"],
-     "merge_access": ["valkey-io"]
+     "merge_access": ["your-org/your-repo"]
    }
    ```
    `merge_labels` is optional — list any repo labels your project uses to mark
    PRs as queued for merge. Leave it out (or empty) to disable label flagging.
+   `merge_access` is optional too — list the repos where you can merge, one
+   `owner/repo` each. A bare org (`"your-org"`) means every repo in it, which is
+   only right if you can merge org-wide; it also makes the merger fetch cover
+   every one of them.
 5. Push — the workflow deploys your personalized dashboard automatically
 
 That's it. Your dashboard will be live at `https://<username>.github.io/PersonalDashboard/`
