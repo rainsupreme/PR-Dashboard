@@ -33,7 +33,7 @@ The stat cards work like a dark board: a card's big number is what that tab
 wants from you, and it is grey until that number is above zero. **To Review**,
 **Reviewing** and **Authored** count the PRs that are *your move* (see the chips
 below), **Issues** counts unread activity, and the tab's total sits in the
-caption (`your move` / `15 open`). A lit card means act; a row of grey numbers
+caption (`15 open`). A lit card means act; a row of grey numbers
 means nothing is waiting on you. **Mentions** lists only items not already on
 another tab, and counts as new everything since the comment that mentioned you
 (or since your reply to it). **Reviewed** and **Done** are history and never light up.

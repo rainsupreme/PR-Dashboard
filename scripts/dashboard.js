@@ -418,7 +418,8 @@ Promise.all([
     localStorage.setItem(READ_MARKERS_KEY, JSON.stringify(staleMarkers));
 
     // Dark board: each card's big number is what the tab wants from you, lit
-    // only while it is above zero; the total goes to the caption. Reviewed and
+    // only while it is above zero; the caption is the tab's total. The color
+    // already says what kind of attention, so the caption carries no label. Reviewed and
     // Done are history, so they show their totals, unlit, with no caption.
     function setCard(tab, big, lit, caption) {
       const card = document.querySelector(`.stat-card[data-tab="${tab}"]`);
@@ -439,13 +440,13 @@ Promise.all([
         "reviewed-open": countActionable(reviewedOpen, triageOpts("reviewed-open")),
         open: countActionable(data.open_prs, triageOpts("open")),
       };
-      setCard("review", mine.review, mine.review > 0, `your move\n${review.length} open`);
-      setCard("reviewed-open", mine["reviewed-open"], mine["reviewed-open"] > 0, `your move\n${reviewedOpen.length} open`);
-      setCard("open", mine.open, mine.open > 0, `your move\n${data.open_prs.length} open`);
+      setCard("review", mine.review, mine.review > 0, `${review.length} open`);
+      setCard("reviewed-open", mine["reviewed-open"], mine["reviewed-open"] > 0, `${reviewedOpen.length} open`);
+      setCard("open", mine.open, mine.open > 0, `${data.open_prs.length} open`);
       const newMentions = unreadCount(data.mentions);
-      setCard("mentions", newMentions, newMentions > 0, `new\n${(data.mentions || []).length} open`);
+      setCard("mentions", newMentions, newMentions > 0, `${(data.mentions || []).length} open`);
       const newIssues = unreadCount(data.issues);
-      setCard("issues", newIssues, newIssues > 0, `new\n${(data.issues || []).length} open`);
+      setCard("issues", newIssues, newIssues > 0, `${(data.issues || []).length} open`);
       setCard("reviewed", data.counts.reviewed_by || 0, false, "");
       setCard("closed", data.counts.closed, false, "");
     }
