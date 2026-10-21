@@ -123,8 +123,13 @@ The all-time Merged counter lives in `data/merger-cache.json` (version
 `MERGER_CACHE_VERSION`; bump to force a rescan). CI reads the previous copy from
 the deployed Pages site (`GITHUB_REPOSITORY` or `DASHBOARD_PAGES_URL`), then
 fetches merges since `last_merged_at`, deduped by the boundary-day `seen` keys.
-Budget per refresh is ~35 GraphQL points and ~260 REST calls; the one-time
-history scan is ~120 points.
+The same file carries `touches: { head_oid: bool }`, the `.github/` answer for
+heads with runs awaiting approval; `pruneTouchesCache()` keeps only live heads
+and never stores a failed lookup (`touchesWorkflows()` returns null). Measured
+steady-state budget for the whole run (personal lists + nine merger repos) is
+47 REST + 20 GraphQL; the one-time history scan is ~150 GraphQL pages.
+`isRateLimited()` decides which 403s `request()` retries: Retry-After,
+`x-ratelimit-remaining: 0` or a rate-limit body, never a permission 403.
 
 ## Setup
 
