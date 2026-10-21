@@ -26,7 +26,8 @@ Other features:
 - Tab counts are colored by what the tab asks of you: yellow = act now, blue =
   your reviewer hat, green = your author hat, purple = peripheral, grey = history
 - Mobile responsive
-- Auto-refreshes hourly via GitHub Actions
+- Refreshes every 15 minutes (a timer dispatches the workflow; an open tab picks
+  up new data within 2 minutes without a reload)
 - Zero dependencies — single HTML file + JSON data
 
 ## Triage
@@ -219,7 +220,8 @@ scripts/fetch-prs.js ← queries GitHub Search + GraphQL APIs, writes data/prs.j
 data/prs.json        ← all PR/issue data + triage signals (refreshed at deploy time)
 index.html           ← single-page dashboard (fetches data/prs.json)
 scripts/utils.js     ← shared logic (sorting, triage scoring) — also unit-tested
-.github/workflows/   ← hourly cron + push + manual trigger
+.github/workflows/   ← hourly cron (throttled by GitHub) + push + workflow_dispatch
+contrib/systemd/     ← timer + service that dispatch the workflow every 15 min
 ```
 
 The GitHub Actions workflow:
@@ -230,13 +232,50 @@ The GitHub Actions workflow:
 
 No data is committed back to the repo — fresh data is fetched at each deploy.
 
+## Refresh cadence
+
+The workflow's hourly `schedule:` is the floor every checkout gets, but GitHub
+throttles scheduled runs on quiet repos: in practice it fires every 3-6 hours.
+`workflow_dispatch` is not throttled, so for a 15-minute cadence add a one-line
+systemd user timer that runs `gh workflow run update.yml -R <owner>/<repo>`.
+The schedule keeps running alongside it; an extra run is cheap. On an always-on
+machine where `gh` is logged in with the `workflow` scope:
+
+```bash
+cp contrib/systemd/pr-dashboard-refresh.* ~/.config/systemd/user/
+# edit PR_DASHBOARD_REPO in the .service if this is a fork
+systemctl --user daemon-reload
+systemctl --user enable --now pr-dashboard-refresh.timer
+systemctl --user list-timers pr-dashboard-refresh.timer   # next fire
+journalctl --user -u pr-dashboard-refresh.service -n 5    # last dispatches
+```
+
+Each run costs a few API requests, not a few hundred: the fetcher downloads the
+currently deployed `data/prs.json` (`PRIOR_DATA_URL`) and reuses an item's
+activity when its search `updated_at` has not moved, and its check-runs when
+the head commit and its settled CI rollup have not moved. GraphQL triage
+signals are always re-fetched, since merge state, thread turns and CI finish
+without touching `updated_at`. A quiet run of the personal lists is ~10 REST +
+~40 GraphQL requests against budgets of 1,000 and 5,000 per hour (the merger
+row adds its own batched GraphQL and a few REST calls per repo), so
+`GITHUB_TOKEN` suffices; set a
+`DASHBOARD_TOKEN` secret (a PAT, public read is enough) only if you want a
+cadence well under 10 minutes. Cached activity is re-fetched after 6 hours
+regardless, bounding anything that fails to bump `updated_at`.
+
+The page polls `data/prs.json` every 2 minutes while open (and when the tab
+becomes visible) and swaps new data in place; filters, pins, open activity
+sections and scroll position survive. The stale banner appears when the data
+is more than 45 minutes old, which means the timer or the workflow stopped.
+
 ## Local Development
 
 ```bash
 # Serve locally (needed for fetch() to work)
 npx serve .
 
-# Manually refresh data
+# Manually refresh data (an existing data/prs.json is used as the prior snapshot;
+# delete it, or set PRIOR_DATA_URL to the deployed copy, to choose the baseline)
 GITHUB_TOKEN=$(gh auth token) node scripts/fetch-prs.js
 ```
 

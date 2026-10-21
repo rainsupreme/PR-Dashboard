@@ -6,6 +6,10 @@ on:
     paths-ignore:
       - "config.json"
       - "README.md"
+  # The hourly schedule is the floor every checkout gets. GitHub throttles it
+  # on quiet repos (3-6 h in practice), so a timer outside GitHub may also
+  # dispatch this workflow for a 15-minute cadence (README, "Refresh cadence").
+  # An extra run is cheap: the fetcher reuses the deployed prs.json.
   schedule:
     - cron: "17 * * * *" # Hourly at :17 (off-peak; :00 is congested and gets delayed/dropped)
   workflow_dispatch:
@@ -56,10 +60,16 @@ jobs:
             git push
           fi
 
+      # The deployed prs.json is the previous run's output; the fetcher reuses
+      # activity for items whose updated_at has not moved, so a quiet run costs
+      # a few dozen requests instead of a few hundred. DASHBOARD_TOKEN is an
+      # optional PAT (public_repo read is enough) for a 5,000/h budget instead
+      # of GITHUB_TOKEN's 1,000/h; not needed at a 15-minute cadence.
       - name: Fetch PR data
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DASHBOARD_TOKEN || secrets.GITHUB_TOKEN }}
           DASHBOARD_USER: ${{ github.repository_owner }}
+          PRIOR_DATA_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/data/prs.json
         run: mkdir -p data && node scripts/fetch-prs.js
 
       - uses: actions/configure-pages@v5
