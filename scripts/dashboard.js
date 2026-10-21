@@ -86,26 +86,13 @@ function labelTextColor(hex) {
 // Local marks per URL: { read_at, pinned_at }. read_at is a statement about
 // the past (new activity after it shows as new again); pinned_at is a promise
 // to act (cleared only by your own action on the item, or the item closing).
-const READ_MARKERS_KEY = "dashboard-read-markers";
-function getReadMarkers() {
-  let raw = {};
-  try { raw = JSON.parse(localStorage.getItem(READ_MARKERS_KEY)) || {}; } catch { raw = {}; }
-  const m = {};
-  Object.keys(raw).forEach(url => { const v = normalizeMarker(raw[url]); if (Object.keys(v).length) m[url] = v; });
-  return m;
-}
-function saveReadMarkers(m) { localStorage.setItem(READ_MARKERS_KEY, JSON.stringify(m)); }
-function updateMarker(url, patch) {
-  const m = getReadMarkers();
-  const cur = { ...(m[url] || {}), ...patch };
-  Object.keys(cur).forEach(k => { if (!cur[k]) delete cur[k]; });
-  if (Object.keys(cur).length) m[url] = cur; else delete m[url];
-  saveReadMarkers(m);
-}
-function setReadMarker(url) { updateMarker(url, { read_at: new Date().toISOString() }); }
-function clearReadMarker(url) { updateMarker(url, { read_at: "" }); }
-function setPin(url, on) { updateMarker(url, { pinned_at: on ? new Date().toISOString() : "" }); }
-function isPinnedUrl(url) { return !!(getReadMarkers()[url] || {}).pinned_at; }
+// The store itself is scripts/marks.js; these names keep the call sites short.
+const marks = createMarkStore(localStorage, normalizeMarker);
+function getReadMarkers() { return marks.all(); }
+function setReadMarker(url) { marks.setRead(url); }
+function clearReadMarker(url) { marks.clearRead(url); }
+function setPin(url, on) { marks.setPin(url, on); }
+function isPinnedUrl(url) { return marks.isPinned(url); }
 function getUnreadActivity(pr, githubUser) {
   if (!pr.activity || pr.activity.length === 0) return [];
   const markers = getReadMarkers();
@@ -441,20 +428,11 @@ Promise.all([
 
     const reviewing = data.reviewing || [];
 
-    // Prune read markers for PRs no longer in any open list
-    const allOpen = [...reviewing, ...data.open_prs, ...(data.issues || []), ...(data.mentions || [])];
-    const allOpenUrls = new Set(allOpen.map(pr => pr.url));
-    const staleMarkers = getReadMarkers();
-    const openByUrl = new Map(allOpen.map(pr => [pr.url, pr]));
-    Object.keys(staleMarkers).forEach(url => {
-      if (!allOpenUrls.has(url)) { delete staleMarkers[url]; return; }
-      // A pin clears itself once you have acted on the item since pinning it.
-      if (staleMarkers[url].pinned_at && !pinStillHolds(staleMarkers[url], openByUrl.get(url), DASHBOARD_USER)) {
-        delete staleMarkers[url].pinned_at;
-        if (!Object.keys(staleMarkers[url]).length) delete staleMarkers[url];
-      }
-    });
-    saveReadMarkers(staleMarkers);
+    // Drop marks for items no longer open, and pins you have acted on since
+    // pinning. Merger rows can be pinned too, so their sections count as open.
+    const mergerRows = data.merger ? Object.values(data.merger.sections || {}).flat() : [];
+    const allOpen = [...reviewing, ...data.open_prs, ...(data.issues || []), ...(data.mentions || []), ...mergerRows];
+    marks.prune(allOpen, (marker, item) => pinStillHolds(marker, item, DASHBOARD_USER));
 
     // Dark board: each card's big number is what the tab wants from you, lit
     // only while it is above zero; the caption is the tab's total. The color
@@ -508,12 +486,10 @@ Promise.all([
     function refreshAll() { updateCards(); renderReviewing(); renderOpen(); renderMentions(); renderIssues(); }
 
     document.getElementById("reset-marks").addEventListener("click", () => {
-      const marks = getReadMarkers();
-      const pins = Object.values(marks).filter(m => m.pinned_at).length;
-      const reads = Object.values(marks).filter(m => m.read_at).length;
+      const { reads, pins } = marks.counts();
       if (!confirm(`Clear your local marks? ${reads} read marks, ${pins} pins.`)) return;
       localStorage.removeItem(LEGACY_OVERRIDES_KEY);
-      localStorage.removeItem(READ_MARKERS_KEY);
+      marks.clear();
       refreshAll();
     });
 
