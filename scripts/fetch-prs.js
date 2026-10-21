@@ -346,7 +346,7 @@ async function fetchIssueActivity(issue) {
   // Falls back to issue creation (handled downstream) when you've never replied.
   const myEvents = activity.filter(a => a.author === GITHUB_USER);
   const my_last_interaction = myEvents.length > 0 ? myEvents[0].created_at : "";
-  return { activity, my_last_interaction, last_push: my_last_interaction };
+  return { activity, my_last_interaction, last_push: my_last_interaction, comments };
 }
 
 async function enrichIssuesWithActivity(issues, label) {
@@ -356,6 +356,41 @@ async function enrichIssuesWithActivity(issues, label) {
   for (const issue of issues) {
     const { activity, my_last_interaction, last_push } = await fetchIssueActivity(issue);
     enriched.push({ ...issue, activity, my_last_interaction, last_push });
+  }
+  return enriched;
+}
+
+// A mention that is already on another tab carries a better signal there
+// (whose move, CI, threads), so it is dropped from the Mentions list.
+function dedupeMentions(mentions, ...otherLists) {
+  const seen = new Set(otherLists.flat().map(i => i.url));
+  return mentions.filter(m => !seen.has(m.url));
+}
+
+// Where unread starts for a mention: your latest comment if you replied after
+// being mentioned, else one second before the comment that mentioned you, so
+// the mention itself reads as new. Falls back to the item's creation when the
+// mention is in the body (comments never contain the handle).
+function mentionAnchor(activity, user, created) {
+  // Whole handle only: @rain must not match @rain-bot.
+  const handle = new RegExp(`@${user.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "i");
+  const mentionedAt = (activity || []).filter(a => a.author !== user && handle.test(a.body || "")).map(a => a.created_at).sort().pop() || "";
+  const myLast = (activity || []).filter(a => a.author === user).map(a => a.created_at).sort().pop() || "";
+  if (myLast && myLast > mentionedAt) return myLast;
+  if (mentionedAt) return new Date(new Date(mentionedAt).getTime() - 1000).toISOString();
+  return created || "";
+}
+
+async function enrichMentionsWithActivity(mentions) {
+  if (mentions.length === 0) return mentions;
+  console.log(`\n  Fetching comments for ${mentions.length} mentions...`);
+  const enriched = [];
+  for (const m of mentions) {
+    const { activity, my_last_interaction, comments } = await fetchIssueActivity(m);
+    // Scan full bodies: the activity feed keeps only a 200-char preview.
+    const full = comments.map(c => ({ author: (c.user || {}).login || "ghost", body: c.body || "", created_at: c.created_at }));
+    const unread_anchor = mentionAnchor(full, GITHUB_USER, m.created);
+    enriched.push({ ...m, activity, my_last_interaction, last_push: unread_anchor, unread_anchor });
   }
   return enriched;
 }
@@ -604,7 +639,7 @@ async function main() {
   const closedPrs = allClosedItems.map(mapPR);
   const reviewedOpen = allReviewedOpenItems.map(mapPR);
   const reviewedBy = allReviewedByItems.map(mapPR);
-  const mentions = allMentionItems.map(mapMention);
+  const mentionsAll = allMentionItems.map(mapMention);
 
   // Enrich open PRs with activity (commits, reviews, comments)
   let toReviewEnriched = await enrichWithActivity(toReview, "to-review");
@@ -636,6 +671,13 @@ async function main() {
 
   // Enrich issues with comment activity (PR-style unread/inline threads).
   const issuesEnriched = await enrichIssuesWithActivity(issues, "issues");
+
+  // Mentions: drop what the other tabs already show, then fetch comments so
+  // unread can start at the mention (or at your reply to it).
+  const mentions = await enrichMentionsWithActivity(
+    dedupeMentions(mentionsAll, toReviewEnriched, openPrsEnriched, reviewedOpenEnriched, issuesEnriched)
+  );
+  console.log(`  Mentions: ${mentionsAll.length} found, ${mentions.length} not already on another tab.`);
 
   const data = {
     github_user: GITHUB_USER,
@@ -671,7 +713,7 @@ async function main() {
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { mapPR, mapMention, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep };
+  module.exports = { mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep };
 }
 
 if (require.main === module) {

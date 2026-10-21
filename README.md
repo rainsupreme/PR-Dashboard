@@ -7,10 +7,10 @@ A GitHub Pages dashboard for tracking your pull requests and issues across one o
 ## Features
 
 - **To Review** — open PRs requesting your review, with stale badges (> 7 days)
-- **Reviewing** — PRs you've reviewed that are still open
-- **Authored** — your open PRs
-- **Mentions** — issues/PRs where you're @mentioned
-- **Issues** — issues assigned to you or opened by you
+- **To Follow Up** — PRs you've reviewed that are still open
+- **To Unblock** — your open PRs
+- **Unread Mentions** — issues/PRs where you're @mentioned and not already on another tab
+- **Unread Issues** — issues assigned to you or opened by you
 - **Reviewed** — PRs you've reviewed (closed/merged)
 - **Done** — your closed/merged PRs
 
@@ -29,7 +29,22 @@ Other features:
 
 ## Triage
 
-Your in-flight PRs (**To Review**, **Reviewing** and **Authored**) are enriched via the GitHub GraphQL API, and every row carries one chip
+The stat cards work like a dark board: a card's big number is what that tab
+wants from you, and it is grey until that number is above zero, so each card
+reads as a sentence (`0 To Unblock · 19 PRs open`). **To Review** counts review
+requests you can act on now; **To Follow Up** counts PRs you reviewed that are
+*your move* again (a re-review, a reply, a stale approval to re-check, a merge);
+**To Unblock** counts your own PRs that are waiting on you (CI, conflicts,
+requested changes, a reply, a reviewer to find, a merge); **Unread Mentions** and
+**Unread Issues** count unread activity. The tab's total sits in the caption
+(`15 PRs open`). A lit card means act; a row of grey numbers
+means nothing is waiting on you. **Mentions** lists only items not already on
+another tab, and counts as new everything since the comment that mentioned you
+(or since your reply to it). **Reviewed** and **Done** are history and never light up.
+The lit color says which hat: yellow = act now, blue = your reviewer hat,
+green = your author hat, purple = peripheral.
+
+Your in-flight PRs (**To Review**, **To Follow Up** and **To Unblock**) are enriched via the GitHub GraphQL API, and every row carries one chip
 that says *whose move it is*, relative to you:
 
 | Chip | Meaning |

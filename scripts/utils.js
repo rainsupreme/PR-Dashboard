@@ -184,6 +184,12 @@ function computeTriageScore(pr, opts) {
   return whoseMove(pr, opts).score;
 }
 
+// How many of these PRs are the user's move. Drives the stat card's big
+// number: the card is lit only while this is above zero.
+function countActionable(prs, opts) {
+  return (prs || []).reduce((n, pr) => n + (isActionable(pr, opts) ? 1 : 0), 0);
+}
+
 function filterUnreadActivity(activity, since) {
   if (!activity || activity.length === 0) return [];
   if (!since) return activity;
@@ -207,5 +213,5 @@ function staleAgeLabel(ms) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, isStale, staleAgeLabel };
+  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, isStale, staleAgeLabel };
 }

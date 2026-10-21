@@ -106,6 +106,9 @@ function getUnreadActivity(pr, githubUser) {
   let since;
   if (markers[pr.url]) {
     since = markers[pr.url];
+  } else if (pr.unread_anchor) {
+    // Mentions: the fetch already decided where "new" starts (the mention, or your reply to it)
+    since = pr.unread_anchor;
   } else if (githubUser && pr.author !== githubUser) {
     // Others' PRs: anchor to my last interaction, or PR creation if never interacted
     since = pr.my_last_interaction || pr.created;
@@ -279,20 +282,25 @@ function renderMention(item) {
     : `<span class="pr-badge badge-mention-issue">Issue</span>`;
   const age = daysOld(item.updated);
   const staleBadge = age > 7 ? `<span class="pr-badge badge-stale">${age}d ago</span>` : "";
+  const { hasActivity, hasUnread, unreadBadge, activitySection, toggleBtn } = buildActivity(item, "issue");
+  // A mention you have answered (or marked read) is someone else's move: dim it.
+  const itemClass = (hasActivity && !hasUnread) ? "pr-item pr-quiet" : "pr-item";
 
-  return `<div class="pr-item">
+  return `<div class="${itemClass}">
     <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
     <span class="pr-number">${item.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
-        ${typeBadge}${staleBadge}
+        ${typeBadge}${staleBadge}${unreadBadge}
       </div>
       <div class="pr-meta">
         <span class="pr-repo">${escapeHtml(item.repo)}</span>
         <span>@${escapeHtml(item.author)}</span>
         <span>updated ${timeAgo(item.updated)}</span>
+        ${toggleBtn}
       </div>
+      ${activitySection}
     </div>
   </div>`;
 }
@@ -402,27 +410,49 @@ Promise.all([
     });
 
     // Prune read markers for PRs no longer in any open list
-    const allOpenUrls = new Set([...data.to_review, ...data.open_prs, ...(data.reviewed_open || []), ...(data.issues || [])].map(pr => pr.url));
+    const allOpenUrls = new Set([...data.to_review, ...data.open_prs, ...(data.reviewed_open || []), ...(data.issues || []), ...(data.mentions || [])].map(pr => pr.url));
     const staleMarkers = getReadMarkers();
     Object.keys(staleMarkers).forEach(url => {
       if (!allOpenUrls.has(url)) { delete staleMarkers[url]; }
     });
     localStorage.setItem(READ_MARKERS_KEY, JSON.stringify(staleMarkers));
 
-    function updateMoveCounts() {
-      const overrides = getOverrides();
-      const movedCount = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open").length;
-      document.getElementById("count-review").textContent = data.counts.to_review - movedCount;
-      document.getElementById("count-reviewed-open").textContent = (data.counts.reviewed_open || 0) + movedCount;
+    // Dark board: each card's big number is what the tab wants from you, lit
+    // only while it is above zero; the caption is the tab's total. The color
+    // already says what kind of attention, so the caption carries no label. Reviewed and
+    // Done are history, so they show their totals, unlit, with no caption.
+    function setCard(tab, big, lit, caption) {
+      const card = document.querySelector(`.stat-card[data-tab="${tab}"]`);
+      document.getElementById(`count-${tab}`).textContent = big;
+      document.getElementById(`sub-${tab}`).textContent = caption || "";
+      card.classList.toggle("lit", !!lit);
     }
-    updateMoveCounts();
-    document.getElementById("count-open").textContent = data.counts.open;
-    document.getElementById("count-mentions").textContent = data.counts.mentions || 0;
-    document.getElementById("count-issues").textContent = data.counts.issues || 0;
-    document.getElementById("count-reviewed").textContent = data.counts.reviewed_by || 0;
-    document.getElementById("count-closed").textContent = data.counts.closed;
+    function unreadCount(items) {
+      return (items || []).filter(i => getUnreadActivity(i, DASHBOARD_USER).some(a => a.type !== "commit")).length;
+    }
+    function updateCards() {
+      const overrides = getOverrides();
+      const moved = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open");
+      const review = data.to_review.filter(pr => overrides[pr.url] !== "reviewed-open");
+      const reviewedOpen = [...moved, ...(data.reviewed_open || []).filter(pr => !moved.some(m => m.url === pr.url))];
+      const mine = {
+        review: countActionable(review, triageOpts("review")),
+        "reviewed-open": countActionable(reviewedOpen, triageOpts("reviewed-open")),
+        open: countActionable(data.open_prs, triageOpts("open")),
+      };
+      setCard("review", mine.review, mine.review > 0, `${review.length} PRs open`);
+      setCard("reviewed-open", mine["reviewed-open"], mine["reviewed-open"] > 0, `${reviewedOpen.length} PRs open`);
+      setCard("open", mine.open, mine.open > 0, `${data.open_prs.length} PRs open`);
+      const newMentions = unreadCount(data.mentions);
+      setCard("mentions", newMentions, newMentions > 0, `${(data.mentions || []).length} open`);
+      const newIssues = unreadCount(data.issues);
+      setCard("issues", newIssues, newIssues > 0, `${(data.issues || []).length} issues open`);
+      setCard("reviewed", data.counts.reviewed_by || 0, false, "");
+      setCard("closed", data.counts.closed, false, "");
+    }
+    updateCards();
 
-    function refreshAll() { updateMoveCounts(); renderReview(); renderReviewedOpen(); }
+    function refreshAll() { updateCards(); renderReview(); renderReviewedOpen(); }
 
     document.getElementById("reset-overrides").addEventListener("click", () => {
       localStorage.removeItem(OVERRIDES_KEY);
@@ -612,7 +642,7 @@ Promise.all([
       if (markBtn) {
         e.stopPropagation();
         setReadMarker(markBtn.dataset.url);
-        renderReview(); renderReviewedOpen(); renderOpen(); renderIssues();
+        updateCards(); renderReview(); renderReviewedOpen(); renderOpen(); renderMentions(); renderIssues();
         return;
       }
     });
