@@ -533,7 +533,8 @@ Promise.all([
     // Dark board: each card's big number is what the tab wants from you, lit
     // only while it is above zero; the caption is the tab's total. The color
     // already says what kind of attention, so the caption carries no label. Reviewed and
-    // Done are history, so they show their totals, unlit, with no caption.
+    // Done are history, so they show their totals unlit, captioned with the span
+    // they cover and the throughput over it (see sinceWithRate).
     function setCard(tab, big, lit, caption) {
       const card = document.querySelector(`.stat-card[data-tab="${tab}"]`);
       document.getElementById(`count-${tab}`).textContent = big;
@@ -558,8 +559,8 @@ Promise.all([
       setCard("mentions", newMentions, newMentions > 0, caption(data.mentions, "open"));
       const newIssues = unreadCount(data.issues);
       setCard("issues", newIssues, newIssues > 0, caption(data.issues, "issues open"));
-      setCard("reviewed", data.counts.reviewed_by || 0, false, since((data.reviewed_by || []).map(p => p.closed)));
-      setCard("closed", data.counts.closed, false, since((data.closed_prs || []).map(p => p.created)));
+      setCard("reviewed", data.counts.reviewed_by || 0, false, sinceWithRate(data.counts.reviewed_by || 0, (data.reviewed_by || []).map(p => p.closed)));
+      setCard("closed", data.counts.closed, false, sinceWithRate(data.counts.closed, (data.closed_prs || []).map(p => p.created)));
       if (data.merger) {
         const m = data.merger;
         const sec = (k) => (m.sections && m.sections[k]) || [];
@@ -569,13 +570,28 @@ Promise.all([
         setCard("m-unstick", sec("unstick").length, sec("unstick").length > 0, "stuck after review");
         const broken = sec("queue").filter(p => p.merger_broken).length;
         setCard("m-queue", sec("queue").length, broken > 0, broken ? `${broken} broken` : "to-be-merged");
-        setCard("m-merged", (m.merged || {}).count || 0, false, since([(m.merged || {}).since]));
+        setCard("m-merged", (m.merged || {}).count || 0, false, sinceWithRate((m.merged || {}).count || 0, [(m.merged || {}).since]));
       }
     }
     // "since 2024-04": the month of the earliest date in the list.
     function since(dates) {
       const d = (dates || []).filter(Boolean).sort()[0];
       return d ? `since ${d.slice(0, 7)}` : "";
+    }
+    // A history caption: the span these totals cover ("since 2024-04") plus the
+    // throughput over it on a second line. The unit adapts day -> week -> month
+    // so the number stays in a friendly >=1.0 range instead of 0.0X per day.
+    function sinceWithRate(count, dates) {
+      const sinceLine = since(dates);
+      const first = (dates || []).filter(Boolean).sort()[0];
+      if (!sinceLine || !count || !first) return sinceLine;
+      const days = Math.max(1, (Date.now() - new Date(first)) / 86400000);
+      let rate = "";
+      for (const [unit, span] of [["day", 1], ["week", 7], ["month", 30]]) {
+        const r = count / (days / span);
+        if (r >= 1 || unit === "month") { rate = `${r.toFixed(1)} per ${unit}`; break; }
+      }
+      return `${sinceLine}\n${rate}`;
     }
     updateCards();
 
