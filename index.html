@@ -71,22 +71,23 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .stale-banner-close:hover { background: var(--color-neutral-muted); }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
 @media (max-width: 400px) { .stats { grid-template-columns: repeat(2, 1fr); } }
-/* Stat cards: label above the count by default; from 1300px (seven ~170px columns) the count sits bottom-left with the label top-left beside it, so the seven counts share one left edge. */
+/* Stat cards: label above the count by default; from 1300px (seven ~170px columns) the count sits bottom-left with the text block top-left beside it, so the seven counts share one left edge. */
 .stat-card { background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 10px 12px 6px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; cursor: pointer; transition: border-color 0.1s; }
 .stat-card:hover { border-color: var(--color-accent-emphasis); }
 .stat-card.active { border-color: var(--color-accent-emphasis); box-shadow: 0 0 0 1px var(--color-accent-emphasis); }
-.stat-label { font-size: 13px; font-weight: 600; line-height: 1.2; text-transform: uppercase; letter-spacing: 0.01em; color: var(--color-fg-muted); min-width: 0; }
-.stat-value { font-family: 'Big Shoulders Display', 'Oswald', 'Arial Narrow', sans-serif-condensed, sans-serif; font-weight: 700; font-size: 60px; line-height: 1; letter-spacing: -0.01em; margin-bottom: -4px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
-@media (min-width: 1300px) { .stat-card { flex-direction: row; align-items: flex-end; gap: 10px; min-height: 72px; } .stat-label { align-self: flex-start; } }
+.stat-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat-label { font-size: 13px; font-weight: 600; line-height: 1.2; text-transform: uppercase; letter-spacing: 0.01em; color: var(--color-fg-muted); }
+.stat-sub { font-size: 11px; line-height: 1.3; color: var(--color-fg-muted); white-space: pre-line; }
+.stat-sub:empty { display: none; }
+.stat-value { font-family: 'Big Shoulders Display', 'Oswald', 'Arial Narrow', sans-serif-condensed, sans-serif; font-weight: 700; font-size: 60px; line-height: 1; letter-spacing: -0.01em; margin-bottom: -4px; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--color-fg-muted); }
+@media (min-width: 1300px) { .stat-card { flex-direction: row; align-items: flex-end; gap: 10px; min-height: 72px; } .stat-text { align-self: flex-start; } }
 @media (max-width: 400px) { .stat-card { padding: 8px 10px 4px; } .stat-value { font-size: 44px; } .stat-label { font-size: 12px; } }
-/* Count color says what the tab asks of you: yellow = act now, blue = your reviewer hat, green = your author hat, purple = peripheral, grey = history. */
-.stat-card.review .stat-value { color: var(--color-attention-fg); }
-.stat-card.reviewed-open .stat-value { color: var(--color-accent-fg); }
-.stat-card.open .stat-value { color: var(--color-open-fg); }
-.stat-card.mentions .stat-value { color: var(--color-done-fg); }
-.stat-card.issues .stat-value { color: var(--color-done-fg); }
-.stat-card.reviewed .stat-value { color: var(--color-fg-muted); }
-.stat-card.closed .stat-value { color: var(--color-fg-muted); }
+/* Dark board: the big count is what the tab wants from you (your move / unread), grey until it is above zero. A lit card means act; the total lives in the caption. Lit color says which hat: yellow = act now, blue = your reviewer hat, green = your author hat, purple = peripheral. Reviewed and Done are history and never light up. */
+.stat-card.lit.review .stat-value { color: var(--color-attention-fg); }
+.stat-card.lit.reviewed-open .stat-value { color: var(--color-accent-fg); }
+.stat-card.lit.open .stat-value { color: var(--color-open-fg); }
+.stat-card.lit.mentions .stat-value { color: var(--color-done-fg); }
+.stat-card.lit.issues .stat-value { color: var(--color-done-fg); }
 .pr-list { display: flex; flex-direction: column; gap: 1px; background: var(--color-border-muted); border: 1px solid var(--color-border-default); border-radius: 6px; overflow: hidden; }
 .pr-item { background: var(--color-canvas-default); padding: 12px 16px; display: flex; align-items: flex-start; gap: 12px; transition: background 0.1s; }
 .pr-item:hover { background: var(--color-canvas-subtle); }
@@ -208,31 +209,52 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 <div class="stats">
   <div class="stat-card review active" data-tab="review">
     <div class="stat-value" id="count-review">-</div>
-    <div class="stat-label">To Review</div>
+    <div class="stat-text">
+      <div class="stat-label">To Review</div>
+      <div class="stat-sub" id="sub-review"></div>
+    </div>
   </div>
   <div class="stat-card reviewed-open" data-tab="reviewed-open">
     <div class="stat-value" id="count-reviewed-open">-</div>
-    <div class="stat-label">Reviewing</div>
+    <div class="stat-text">
+      <div class="stat-label">Reviewing</div>
+      <div class="stat-sub" id="sub-reviewed-open"></div>
+    </div>
   </div>
   <div class="stat-card open" data-tab="open">
     <div class="stat-value" id="count-open">-</div>
-    <div class="stat-label">Authored</div>
+    <div class="stat-text">
+      <div class="stat-label">Authored</div>
+      <div class="stat-sub" id="sub-open"></div>
+    </div>
   </div>
   <div class="stat-card mentions" data-tab="mentions">
     <div class="stat-value" id="count-mentions">-</div>
-    <div class="stat-label">Mentions</div>
+    <div class="stat-text">
+      <div class="stat-label">Mentions</div>
+      <div class="stat-sub" id="sub-mentions"></div>
+    </div>
   </div>
   <div class="stat-card issues" data-tab="issues">
     <div class="stat-value" id="count-issues">-</div>
-    <div class="stat-label">Issues</div>
+    <div class="stat-text">
+      <div class="stat-label">Issues</div>
+      <div class="stat-sub" id="sub-issues"></div>
+    </div>
   </div>
   <div class="stat-card reviewed" data-tab="reviewed">
     <div class="stat-value" id="count-reviewed">-</div>
-    <div class="stat-label">Reviewed</div>
+    <div class="stat-text">
+      <div class="stat-label">Reviewed</div>
+      <div class="stat-sub" id="sub-reviewed"></div>
+    </div>
   </div>
   <div class="stat-card closed" data-tab="closed">
     <div class="stat-value" id="count-closed">-</div>
-    <div class="stat-label">Done</div>
+    <div class="stat-text">
+      <div class="stat-label">Done</div>
+      <div class="stat-sub" id="sub-closed"></div>
+    </div>
   </div>
 </div>
 

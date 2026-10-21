@@ -409,20 +409,41 @@ Promise.all([
     });
     localStorage.setItem(READ_MARKERS_KEY, JSON.stringify(staleMarkers));
 
-    function updateMoveCounts() {
-      const overrides = getOverrides();
-      const movedCount = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open").length;
-      document.getElementById("count-review").textContent = data.counts.to_review - movedCount;
-      document.getElementById("count-reviewed-open").textContent = (data.counts.reviewed_open || 0) + movedCount;
+    // Dark board: each card's big number is what the tab wants from you, lit
+    // only while it is above zero; the total goes to the caption. Reviewed and
+    // Done are history, so they show their totals, unlit, with no caption.
+    function setCard(tab, big, lit, caption) {
+      const card = document.querySelector(`.stat-card[data-tab="${tab}"]`);
+      document.getElementById(`count-${tab}`).textContent = big;
+      document.getElementById(`sub-${tab}`).textContent = caption || "";
+      card.classList.toggle("lit", !!lit);
     }
-    updateMoveCounts();
-    document.getElementById("count-open").textContent = data.counts.open;
-    document.getElementById("count-mentions").textContent = data.counts.mentions || 0;
-    document.getElementById("count-issues").textContent = data.counts.issues || 0;
-    document.getElementById("count-reviewed").textContent = data.counts.reviewed_by || 0;
-    document.getElementById("count-closed").textContent = data.counts.closed;
+    function unreadCount(items) {
+      return (items || []).filter(i => getUnreadActivity(i, DASHBOARD_USER).some(a => a.type !== "commit")).length;
+    }
+    function updateCards() {
+      const overrides = getOverrides();
+      const moved = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open");
+      const review = data.to_review.filter(pr => overrides[pr.url] !== "reviewed-open");
+      const reviewedOpen = [...moved, ...(data.reviewed_open || []).filter(pr => !moved.some(m => m.url === pr.url))];
+      const mine = {
+        review: countActionable(review, triageOpts("review")),
+        "reviewed-open": countActionable(reviewedOpen, triageOpts("reviewed-open")),
+        open: countActionable(data.open_prs, triageOpts("open")),
+      };
+      setCard("review", mine.review, mine.review > 0, `your move\n${review.length} open`);
+      setCard("reviewed-open", mine["reviewed-open"], mine["reviewed-open"] > 0, `your move\n${reviewedOpen.length} open`);
+      setCard("open", mine.open, mine.open > 0, `your move\n${data.open_prs.length} open`);
+      // Mentions carry no activity feed, so there is no unread to light them by.
+      setCard("mentions", data.counts.mentions || 0, false, "open");
+      const newIssues = unreadCount(data.issues);
+      setCard("issues", newIssues, newIssues > 0, `new\n${(data.issues || []).length} open`);
+      setCard("reviewed", data.counts.reviewed_by || 0, false, "");
+      setCard("closed", data.counts.closed, false, "");
+    }
+    updateCards();
 
-    function refreshAll() { updateMoveCounts(); renderReview(); renderReviewedOpen(); }
+    function refreshAll() { updateCards(); renderReview(); renderReviewedOpen(); }
 
     document.getElementById("reset-overrides").addEventListener("click", () => {
       localStorage.removeItem(OVERRIDES_KEY);
@@ -612,7 +633,7 @@ Promise.all([
       if (markBtn) {
         e.stopPropagation();
         setReadMarker(markBtn.dataset.url);
-        renderReview(); renderReviewedOpen(); renderOpen(); renderIssues();
+        updateCards(); renderReview(); renderReviewedOpen(); renderOpen(); renderIssues();
         return;
       }
     });

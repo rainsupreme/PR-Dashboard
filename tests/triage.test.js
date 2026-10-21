@@ -1,7 +1,7 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, sortPRs,
+  ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, sortPRs,
 } = require("../scripts/utils.js");
 const { mapSignals, mapPR } = require("../scripts/fetch-prs.js");
 
@@ -403,6 +403,29 @@ describe("isActionable is whoseMove().actionable", () => {
         assert.equal(isActionable(pr(x), o), whoseMove(pr(x), o).actionable, `${type} ${JSON.stringify(x)}`);
       }
     }
+  });
+});
+
+describe("countActionable: the stat card's big number", () => {
+  it("counts only PRs that are the user's move, per tab", () => {
+    const o = { mergeLabels: MERGE, type: "open" };
+    const prs = [
+      pr({ ci_jobs: jobs("failure") }),            // fix CI: mine
+      pr({ has_human_reviewer: false }),           // find a reviewer: mine
+      pr({ waiting_on: ["alice"] }),               // their move
+      pr({ draft: true }),                         // draft: not actionable
+      pr(READY),                                   // nudge a committer: mine
+    ];
+    assert.equal(countActionable(prs, o), 3);
+    assert.equal(countActionable(prs, o), prs.filter(p => isActionable(p, o)).length);
+  });
+  it("is 0 for an empty or missing list, so a card can go dark", () => {
+    assert.equal(countActionable([], { type: "review" }), 0);
+    assert.equal(countActionable(undefined, { type: "review" }), 0);
+  });
+  it("an incoming review request counts unless the author is blocked", () => {
+    const o = { type: "review" };
+    assert.equal(countActionable([pr({}), pr({ ci_jobs: jobs("failure") }), pr({ mergeable: "CONFLICTING" })], o), 1);
   });
 });
 

@@ -11,7 +11,11 @@ Displays:
 
 The stat cards' tab labels are To Review / Reviewing / Authored / Mentions /
 Issues / Reviewed / Done; the count is set in the self-hosted Big Shoulders
-Display (`fonts/`) and colored by what the tab asks of you (see README).
+Display (`fonts/`). The cards are a dark board: the big number is the tab's
+*your move* count (`countActionable()` in `scripts/utils.js`; unread for Issues;
+the plain total for Mentions, Reviewed and Done), the caption holds the total,
+and `updateCards()` in `scripts/dashboard.js` toggles a `lit` class only while
+the number is above zero. Color applies only to lit cards (see README).
 
 ## Files
 

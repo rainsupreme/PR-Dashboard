@@ -29,6 +29,16 @@ Other features:
 
 ## Triage
 
+The stat cards work like a dark board: a card's big number is what that tab
+wants from you, and it is grey until that number is above zero. **To Review**,
+**Reviewing** and **Authored** count the PRs that are *your move* (see the chips
+below), **Issues** counts unread activity, and the tab's total sits in the
+caption (`your move` / `15 open`). A lit card means act; a row of grey numbers
+means nothing is waiting on you. **Mentions** has no activity feed yet, so it
+shows its total unlit. **Reviewed** and **Done** are history and never light up.
+The lit color says which hat: yellow = act now, blue = your reviewer hat,
+green = your author hat, purple = peripheral.
+
 Your in-flight PRs (**To Review**, **Reviewing** and **Authored**) are enriched via the GitHub GraphQL API, and every row carries one chip
 that says *whose move it is*, relative to you:
 
