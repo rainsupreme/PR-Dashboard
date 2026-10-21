@@ -7,7 +7,11 @@ A GitHub Pages PR dashboard for tracking pull requests across the **valkey-io** 
 Displays:
 - PRs awaiting your review
 - Your open/in-progress PRs
-- Completed (merged/closed) PRs with filtering
+- Done (merged/closed) PRs with filtering
+
+The stat cards' tab labels are To Review / Reviewing / Authored / Mentions /
+Issues / Reviewed / Done; the count is set in the self-hosted Big Shoulders
+Display (`fonts/`) and colored by what the tab asks of you (see README).
 
 ## Files
 
