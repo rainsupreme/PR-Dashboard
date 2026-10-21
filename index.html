@@ -87,6 +87,12 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .stat-card.lit.open .stat-value { color: var(--color-open-fg); }
 .stat-card.lit.mentions .stat-value { color: var(--color-done-fg); }
 .stat-card.lit.issues .stat-value { color: var(--color-done-fg); }
+/* Merger row (shown only with merge_access): duties only someone with merge rights can do. Lit = the merger hat, yellow. */
+.stats-merger { margin-bottom: 12px; }
+.stats-merger[hidden] { display: none; }
+.stat-card.lit.m-ci .stat-value, .stat-card.lit.m-maint .stat-value, .stat-card.lit.m-land .stat-value, .stat-card.lit.m-unstick .stat-value, .stat-card.lit.m-queue .stat-value { color: var(--color-attention-fg); }
+.stat-card.active { background: var(--color-accent-subtle); }
+.section-def { font-size: 12px; color: var(--color-fg-muted); margin: -6px 0 12px; }
 .pr-list { display: flex; flex-direction: column; gap: 1px; background: var(--color-border-muted); border: 1px solid var(--color-border-default); border-radius: 6px; overflow: hidden; }
 .pr-item { background: var(--color-canvas-default); padding: 12px 16px; display: flex; align-items: flex-start; gap: 12px; transition: background 0.1s; }
 .pr-item:hover { background: var(--color-canvas-subtle); }
@@ -229,6 +235,51 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
   <button id="stale-banner-close" class="stale-banner-close" title="Dismiss">✕</button>
 </div>
 
+<div class="stats stats-merger" id="stats-merger" hidden>
+  <div class="stat-card m-ci" data-tab="m-ci">
+    <div class="stat-value" id="count-m-ci">-</div>
+    <div class="stat-text">
+      <div class="stat-label">Let CI Run</div>
+      <div class="stat-sub" id="sub-m-ci"></div>
+    </div>
+  </div>
+  <div class="stat-card m-maint" data-tab="m-maint">
+    <div class="stat-value" id="count-m-maint">-</div>
+    <div class="stat-text">
+      <div class="stat-label">Needs a Maintainer</div>
+      <div class="stat-sub" id="sub-m-maint"></div>
+    </div>
+  </div>
+  <div class="stat-card m-land" data-tab="m-land">
+    <div class="stat-value" id="count-m-land">-</div>
+    <div class="stat-text">
+      <div class="stat-label">To Land</div>
+      <div class="stat-sub" id="sub-m-land"></div>
+    </div>
+  </div>
+  <div class="stat-card m-unstick" data-tab="m-unstick">
+    <div class="stat-value" id="count-m-unstick">-</div>
+    <div class="stat-text">
+      <div class="stat-label">To Unstick</div>
+      <div class="stat-sub" id="sub-m-unstick"></div>
+    </div>
+  </div>
+  <div class="stat-card m-queue" data-tab="m-queue">
+    <div class="stat-value" id="count-m-queue">-</div>
+    <div class="stat-text">
+      <div class="stat-label">Queued</div>
+      <div class="stat-sub" id="sub-m-queue"></div>
+    </div>
+  </div>
+  <div class="stat-card m-merged" data-tab="m-merged">
+    <div class="stat-value" id="count-m-merged">-</div>
+    <div class="stat-text">
+      <div class="stat-label">Merged</div>
+      <div class="stat-sub" id="sub-m-merged"></div>
+    </div>
+  </div>
+</div>
+
 <div class="stats">
   <div class="stat-card reviewing active" data-tab="reviewing">
     <div class="stat-value" id="count-reviewing">-</div>
@@ -268,7 +319,7 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
   <div class="stat-card closed" data-tab="closed">
     <div class="stat-value" id="count-closed">-</div>
     <div class="stat-text">
-      <div class="stat-label">Done</div>
+      <div class="stat-label">Authored</div>
       <div class="stat-sub" id="sub-closed"></div>
     </div>
   </div>
@@ -407,6 +458,60 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
     <input type="date" class="filter-input" id="filter-closed-to">
   </div>
   <div class="pr-list" id="list-closed"></div>
+</div>
+
+<div id="tab-m-ci" class="tab-content">
+  <div class="section-header">
+    <span class="section-title">Let CI run</span>
+    <span class="section-count" id="section-count-m-ci"></span>
+  </div>
+  <div class="section-def">First-time contributors whose workflow runs are waiting for someone with write access to approve them in the Actions tab. Oldest first.</div>
+  <div class="pr-list" id="list-m-ci"></div>
+</div>
+
+<div id="tab-m-maint" class="tab-content">
+  <div class="section-header">
+    <span class="section-title">Needs a maintainer</span>
+    <span class="section-count" id="section-count-m-maint"></span>
+  </div>
+  <div class="section-def">Reviewed only by people without write access; no committer has reviewed, commented, or been requested. Oldest first.</div>
+  <div class="pr-list" id="list-m-maint"></div>
+</div>
+
+<div id="tab-m-land" class="tab-content">
+  <div class="section-header">
+    <span class="section-title">To land</span>
+    <span class="section-count" id="section-count-m-land"></span>
+  </div>
+  <div class="section-def">Approved by a committer on the current head, green and mergeable, and still unmerged a week later. Anyone with merge rights can land these.</div>
+  <div class="pr-list" id="list-m-land"></div>
+</div>
+
+<div id="tab-m-unstick" class="tab-content">
+  <div class="section-header">
+    <span class="section-title">To unstick</span>
+    <span class="section-count" id="section-count-m-unstick"></span>
+  </div>
+  <div class="section-def">Committer-approved but conflicting or red, or changes requested and the author quiet for a month. The author's move, but a nudge from a maintainer is what moves it.</div>
+  <div class="pr-list" id="list-m-unstick"></div>
+</div>
+
+<div id="tab-m-queue" class="tab-content">
+  <div class="section-header">
+    <span class="section-title">Queued</span>
+    <span class="section-count" id="section-count-m-queue"></span>
+  </div>
+  <div class="section-def">Carrying a merge label. Shown with CI and conflict state so a broken queued PR is visible.</div>
+  <div class="pr-list" id="list-m-queue"></div>
+</div>
+
+<div id="tab-m-merged" class="tab-content">
+  <div class="section-header">
+    <span class="section-title">Merged by you</span>
+    <span class="section-count" id="section-count-m-merged"></span>
+  </div>
+  <div class="section-def">Every PR you have merged in the repos you can merge in, all time.</div>
+  <div class="pr-list" id="list-m-merged"></div>
 </div>
 
 <script src="scripts/utils.js"></script>

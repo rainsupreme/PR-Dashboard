@@ -103,6 +103,27 @@ switches to a grid (`ava num title rail` header row, then chips/meta/ci/activity
 full-width) with `.pr-content`/`.pr-title-row` as `display: contents`, so the row
 markup is the same at every width.
 
+## Merger row
+
+`config.merge_access` (orgs or `owner/repo`) turns on `fetchMergerData()` in
+`scripts/fetch-prs.js`: one search per entry for all open PRs, the lean signals
+fragment (no review threads) in batches of 25, `actions/runs?status=action_required`
+per repo keyed by head sha, collaborators-with-push per repo (403 without push
+access; the merge-history set of mergers is the fallback and complement), and
+`.github/` file checks only for PRs whose runs are waiting. `buildMergerSections()`
+in `scripts/merger.js` (pure, tested in `tests/merger.test.js`) assigns each PR to
+at most one of ci / maint / land / unstick / queue with a `merger_reason`. Only
+section members are published under `data.merger`; the dashboard renders them
+with `renderPR(pr, "merger")`, which uses the reason as the move chip and gives
+the row a pin-only rail (no activity feed, so no read mark).
+
+The all-time Merged counter lives in `data/merger-cache.json` (version
+`MERGER_CACHE_VERSION`; bump to force a rescan). CI reads the previous copy from
+the deployed Pages site (`GITHUB_REPOSITORY` or `DASHBOARD_PAGES_URL`), then
+fetches merges since `last_merged_at`, deduped by the boundary-day `seen` keys.
+Budget per refresh is ~35 GraphQL points and ~260 REST calls; the one-time
+history scan is ~120 points.
+
 ## Setup
 
 1. Push this repo to GitHub

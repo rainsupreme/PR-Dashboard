@@ -202,11 +202,14 @@ function renderPR(pr, type) {
   // How long a first request has waited on me. Only while it is still my
   // first look: once I have reviewed, or while the author owes something, the
   // age says nothing about me.
-  const move = type !== "closed" ? whoseMove(pr, triageOpts(type)) : null;
+  // Merger rows carry a precomputed reason from the fetch instead of whoseMove.
+  const move = type === "merger"
+    ? (pr.merger_reason ? { owner: "me", action: pr.merger_reason, who: [], score: 0, actionable: true } : null)
+    : type !== "closed" ? whoseMove(pr, triageOpts(type)) : null;
   const age = (type === "reviewing" && move && move.action === "review") ? daysOld(pr.created) : 0;
   const staleBadge = age > 7 ? `<span class="pr-badge badge-stale">${age}d waiting</span>` : "";
-  const dateLabel = type === "closed" ? `closed ${timeAgo(pr.closed)}` : `updated ${timeAgo(pr.updated)}`;
-  const authorLine = type === "reviewing" ? `<span>@${escapeHtml(pr.author)}</span>` : "";
+  const dateLabel = type === "closed" ? `closed ${timeAgo(pr.closed)}` : type === "merger" ? `opened ${timeAgo(pr.created)} · updated ${timeAgo(pr.updated)}` : `updated ${timeAgo(pr.updated)}`;
+  const authorLine = (type === "reviewing" || type === "merger") ? `<span>@${escapeHtml(pr.author)}</span>` : "";
 
   const { hasActivity, hasUnread, unreadBadge, activitySection, toggleBtn } = buildActivity(pr, type);
 
@@ -479,8 +482,24 @@ Promise.all([
       setCard("mentions", newMentions, newMentions > 0, caption(data.mentions, "open"));
       const newIssues = unreadCount(data.issues);
       setCard("issues", newIssues, newIssues > 0, caption(data.issues, "issues open"));
-      setCard("reviewed", data.counts.reviewed_by || 0, false, "");
-      setCard("closed", data.counts.closed, false, "");
+      setCard("reviewed", data.counts.reviewed_by || 0, false, since((data.reviewed_by || []).map(p => p.closed)));
+      setCard("closed", data.counts.closed, false, since((data.closed_prs || []).map(p => p.created)));
+      if (data.merger) {
+        const m = data.merger;
+        const sec = (k) => (m.sections && m.sections[k]) || [];
+        setCard("m-ci", sec("ci").length, sec("ci").length > 0, `${m.total_open} PRs open`);
+        setCard("m-maint", sec("maint").length, sec("maint").length > 0, "community-reviewed only");
+        setCard("m-land", sec("land").length, sec("land").length > 0, "approved 7d+, unmerged");
+        setCard("m-unstick", sec("unstick").length, sec("unstick").length > 0, "stuck after review");
+        const broken = sec("queue").filter(p => p.merger_broken).length;
+        setCard("m-queue", sec("queue").length, broken > 0, broken ? `${broken} broken` : "to-be-merged");
+        setCard("m-merged", (m.merged || {}).count || 0, false, since([(m.merged || {}).since]));
+      }
+    }
+    // "since 2024-04": the month of the earliest date in the list.
+    function since(dates) {
+      const d = (dates || []).filter(Boolean).sort()[0];
+      return d ? `since ${d.slice(0, 7)}` : "";
     }
     updateCards();
 
@@ -578,6 +597,29 @@ Promise.all([
         : `<div class="loading">No PRs match the filter</div>`;
       document.getElementById("section-count-closed").textContent = `${filtered.length} of ${data.counts.closed}`;
     };
+
+    // Merger row: only with merge_access, and only the sections the fetch published.
+    if (data.merger) {
+      document.getElementById("stats-merger").hidden = false;
+      const m = data.merger;
+      const renderSection = (key, tab, empty) => {
+        const prs = (m.sections && m.sections[key]) || [];
+        document.getElementById(`list-${tab}`).innerHTML = prs.length
+          ? prs.map(pr => renderPR(pr, "merger")).join("")
+          : `<div class="loading">${empty}</div>`;
+        document.getElementById(`section-count-${tab}`).textContent = `${prs.length} of ${m.total_open} open${m.incomplete ? ` · ${m.incomplete} unclassified (rate limited)` : ""}`;
+      };
+      renderSection("ci", "m-ci", "No workflow runs are waiting for approval");
+      renderSection("maint", "m-maint", "Every reviewed PR has a committer on it");
+      renderSection("land", "m-land", "Nothing approved is sitting unmerged");
+      renderSection("unstick", "m-unstick", "Nothing is stuck after review");
+      renderSection("queue", "m-queue", "Nothing is labelled for merge");
+      const mine = (m.merged && m.merged.prs) || [];
+      document.getElementById("list-m-merged").innerHTML = mine.length
+        ? mine.map(pr => renderPR(pr, "closed")).join("")
+        : `<div class="loading">You have not merged anything here yet</div>`;
+      document.getElementById("section-count-m-merged").textContent = `${mine.length} merged`;
+    }
 
     buildRepoCheckboxes("repo-checkboxes-reviewing", reviewing, renderReviewing);
     buildRepoCheckboxes("repo-checkboxes-open", data.open_prs, renderOpen);
