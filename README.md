@@ -37,7 +37,7 @@ requests you can act on now; **To Follow Up** counts PRs you reviewed that are
 **To Unblock** counts your own PRs that are waiting on you (CI, conflicts,
 requested changes, a reply, a reviewer to find, a merge); **Unread Mentions** and
 **Unread Issues** count unread activity. The tab's total sits in the caption
-(`15 PRs open`). A lit card means act; a row of grey numbers
+(`15 PRs open`, plus `· N pinned` when you have pinned rows). A lit card means act; a row of grey numbers
 means nothing is waiting on you. **Mentions** lists only items not already on
 another tab, and counts as new everything since the comment that mentioned you
 (or since your reply to it). **Reviewed** and **Done** are history and never light up.
@@ -55,6 +55,17 @@ that says *whose move it is*, relative to you:
 | **waiting on @name · Nd** | Their move: a reviewer owes a look (requested, or their verdict predates the head, or you answered their thread last). Dimmed. |
 | **author's move** | On a PR you reviewed: CI red, conflicts, or changes requested. Dimmed. |
 | **queued for merge** | Carries a merge label and is healthy. Dimmed. |
+
+Every in-flight row also has a small **rail** on its right edge with the row's
+manual controls, in the same place at every width: move to Reviewing (✓ / ↩
+on the review tabs), **mark read** (✓, or ↩ to mark unread again) and **pin** (⚑).
+A read mark is a statement about the past: new activity after it shows as new
+again. A pin is a promise to act: the row stays bright, gets a bar on its left
+edge and a flag on the avatar, counts toward the card's lit number, and clears
+only when *you* act on the item (comment, review, push) or it closes. Both are
+stored in your browser (localStorage), so they are per device; the reset button
+in the header clears them along with the tab moves. On phones the avatar, number
+and title form a header row and the chips, meta and rail flow beneath.
 
 Beside it, the specific state chips: ✓ approved (or *approved (older head)*),
 ✗ changes requested, ✗ CI failing, ⊘ CI cancelled, ⚠ conflicts, and the

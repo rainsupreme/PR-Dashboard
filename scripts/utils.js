@@ -185,9 +185,38 @@ function computeTriageScore(pr, opts) {
 }
 
 // How many of these PRs are the user's move. Drives the stat card's big
-// number: the card is lit only while this is above zero.
-function countActionable(prs, opts) {
-  return (prs || []).reduce((n, pr) => n + (isActionable(pr, opts) ? 1 : 0), 0);
+// number: the card is lit only while this is above zero. `isPinned(pr)` adds
+// rows the user pinned by hand; a pinned row that is also actionable counts once.
+function countActionable(prs, opts, isPinned) {
+  return (prs || []).reduce((n, pr) => n + ((isActionable(pr, opts) || (isPinned && isPinned(pr))) ? 1 : 0), 0);
+}
+
+// Local read/pin marks live in localStorage as { read_at, pinned_at } per URL.
+// Earlier versions stored the bare read timestamp; accept both shapes.
+function normalizeMarker(v) {
+  if (!v) return {};
+  if (typeof v === "string") return { read_at: v };
+  const m = {};
+  if (v.read_at) m.read_at = v.read_at;
+  if (v.pinned_at) m.pinned_at = v.pinned_at;
+  return m;
+}
+
+// The latest thing the user did on an item, from its activity feed (comments,
+// reviews, commits) plus their own pushes. Empty when they never acted.
+function myLastAction(item, user) {
+  const mine = (item.activity || []).filter(a => a.author === user).map(a => a.created_at);
+  if (item.author === user && item.last_push) mine.push(item.last_push);
+  return mine.sort().pop() || "";
+}
+
+// A pin is a promise to act. It clears itself once the user has acted on the
+// item after pinning it; other people's activity never clears it.
+function pinStillHolds(marker, item, user) {
+  const m = normalizeMarker(marker);
+  if (!m.pinned_at) return false;
+  const acted = myLastAction(item, user);
+  return !(acted && acted > m.pinned_at);
 }
 
 function filterUnreadActivity(activity, since) {
@@ -213,5 +242,5 @@ function staleAgeLabel(ms) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, isStale, staleAgeLabel };
+  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, normalizeMarker, myLastAction, pinStillHolds, isStale, staleAgeLabel };
 }

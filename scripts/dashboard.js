@@ -91,21 +91,35 @@ function setOverride(url, target) {
   localStorage.setItem(OVERRIDES_KEY, JSON.stringify(o));
 }
 
+// Local marks per URL: { read_at, pinned_at }. read_at is a statement about
+// the past (new activity after it shows as new again); pinned_at is a promise
+// to act (cleared only by your own action on the item, or the item closing).
 const READ_MARKERS_KEY = "dashboard-read-markers";
 function getReadMarkers() {
-  try { return JSON.parse(localStorage.getItem(READ_MARKERS_KEY)) || {}; } catch { return {}; }
+  let raw = {};
+  try { raw = JSON.parse(localStorage.getItem(READ_MARKERS_KEY)) || {}; } catch { raw = {}; }
+  const m = {};
+  Object.keys(raw).forEach(url => { const v = normalizeMarker(raw[url]); if (Object.keys(v).length) m[url] = v; });
+  return m;
 }
-function setReadMarker(url) {
+function saveReadMarkers(m) { localStorage.setItem(READ_MARKERS_KEY, JSON.stringify(m)); }
+function updateMarker(url, patch) {
   const m = getReadMarkers();
-  m[url] = new Date().toISOString();
-  localStorage.setItem(READ_MARKERS_KEY, JSON.stringify(m));
+  const cur = { ...(m[url] || {}), ...patch };
+  Object.keys(cur).forEach(k => { if (!cur[k]) delete cur[k]; });
+  if (Object.keys(cur).length) m[url] = cur; else delete m[url];
+  saveReadMarkers(m);
 }
+function setReadMarker(url) { updateMarker(url, { read_at: new Date().toISOString() }); }
+function clearReadMarker(url) { updateMarker(url, { read_at: "" }); }
+function setPin(url, on) { updateMarker(url, { pinned_at: on ? new Date().toISOString() : "" }); }
+function isPinnedUrl(url) { return !!(getReadMarkers()[url] || {}).pinned_at; }
 function getUnreadActivity(pr, githubUser) {
   if (!pr.activity || pr.activity.length === 0) return [];
   const markers = getReadMarkers();
   let since;
-  if (markers[pr.url]) {
-    since = markers[pr.url];
+  if (markers[pr.url] && markers[pr.url].read_at) {
+    since = markers[pr.url].read_at;
   } else if (pr.unread_anchor) {
     // Mentions: the fetch already decided where "new" starts (the mention, or your reply to it)
     since = pr.unread_anchor;
@@ -166,6 +180,22 @@ function buildActivity(item, type) {
   }
   const toggleBtn = `<button class="activity-toggle" data-target="${actId}">▸ activity</button>`;
   return { hasActivity: true, hasUnread, unreadBadge, activitySection, toggleBtn };
+}
+
+// The row's manual controls, stacked on the right edge: the tab move button
+// (passed in by the tab that renders the row), read/unread, and pin.
+function rowRail(item, moveBtn, hasActivity) {
+  const url = escapeAttr(item.url);
+  const marker = getReadMarkers()[item.url] || {};
+  const pinned = !!marker.pinned_at;
+  const readBtn = !hasActivity ? ""
+    : marker.read_at
+      ? `<button class="rail-btn" data-url="${url}" data-action="mark-unread" title="Mark unread">↩</button>`
+      : `<button class="rail-btn" data-url="${url}" data-action="mark-read" title="Mark read (new activity will show again)">✓</button>`;
+  const pinBtn = pinned
+    ? `<button class="rail-btn on" data-url="${url}" data-action="unpin" title="Pinned: stays bright until you act on it. Click to unpin.">⚑</button>`
+    : `<button class="rail-btn" data-url="${url}" data-action="pin" title="Pin: keep bright until you act on it">⚑</button>`;
+  return `<div class="row-rail">${moveBtn || ""}${readBtn}${pinBtn}</div>`;
 }
 
 function renderPR(pr, type, moveBtn) {
@@ -252,16 +282,18 @@ function renderPR(pr, type, moveBtn) {
   // Dim rows that are someone else's move and have nothing new to read. Dim
   // never means "nothing is wrong": a PR nobody has picked up stays bright.
   const actionable = move ? move.actionable : false;
-  const itemClass = (hasActivity && !hasUnread && !actionable) ? "pr-item pr-quiet" : "pr-item";
+  const pinned = type !== "closed" && isPinnedUrl(pr.url);
+  const quiet = hasActivity && !hasUnread && !actionable && !pinned;
+  const itemClass = `pr-item${quiet ? " pr-quiet" : ""}${pinned ? " pinned" : ""}`;
+  const rail = type !== "closed" ? rowRail(pr, moveBtnHtml, hasActivity) : "";
 
   return `<div class="${itemClass}">
-    <img class="pr-avatar" src="${escapeAttr(pr.avatar)}" alt="" loading="lazy">
+    <img class="pr-avatar" src="${escapeAttr(pr.avatar)}" alt="" loading="lazy"><span class="pin-flag">⚑</span>
     <span class="pr-number">${pr.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(pr.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(pr.title)}</a>
-        ${moveChip}${badge}${staleBadge}${mergeLabelBadges}${signalBadges}${unreadBadge}
-        ${moveBtnHtml}
+        <span class="pr-chips">${moveChip}${badge}${staleBadge}${mergeLabelBadges}${signalBadges}${unreadBadge}</span>
       </div>
       <div class="pr-meta">
         <span class="pr-repo">${escapeHtml(pr.repo)}</span>
@@ -272,7 +304,7 @@ function renderPR(pr, type, moveBtn) {
       </div>
       ${activitySection}
     </div>
-    ${ciDots ? `<span class="ci-rail">${ciDots}</span>` : ""}
+    ${ciDots ? `<span class="ci-rail">${ciDots}</span>` : ""}${rail}
   </div>`;
 }
 
@@ -284,15 +316,16 @@ function renderMention(item) {
   const staleBadge = age > 7 ? `<span class="pr-badge badge-stale">${age}d ago</span>` : "";
   const { hasActivity, hasUnread, unreadBadge, activitySection, toggleBtn } = buildActivity(item, "issue");
   // A mention you have answered (or marked read) is someone else's move: dim it.
-  const itemClass = (hasActivity && !hasUnread) ? "pr-item pr-quiet" : "pr-item";
+  const pinned = isPinnedUrl(item.url);
+  const itemClass = `pr-item${(hasActivity && !hasUnread && !pinned) ? " pr-quiet" : ""}${pinned ? " pinned" : ""}`;
 
   return `<div class="${itemClass}">
-    <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
+    <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy"><span class="pin-flag">⚑</span>
     <span class="pr-number">${item.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
-        ${typeBadge}${staleBadge}${unreadBadge}
+        <span class="pr-chips">${typeBadge}${staleBadge}${unreadBadge}</span>
       </div>
       <div class="pr-meta">
         <span class="pr-repo">${escapeHtml(item.repo)}</span>
@@ -302,19 +335,21 @@ function renderMention(item) {
       </div>
       ${activitySection}
     </div>
+    ${rowRail(item, "", hasActivity)}
   </div>`;
 }
 
 function renderIssue(item) {
   const { hasActivity, hasUnread, unreadBadge, activitySection, toggleBtn } = buildActivity(item, "issue");
-  const itemClass = (hasActivity && !hasUnread) ? "pr-item pr-quiet" : "pr-item";
+  const pinned = isPinnedUrl(item.url);
+  const itemClass = `pr-item${(hasActivity && !hasUnread && !pinned) ? " pr-quiet" : ""}${pinned ? " pinned" : ""}`;
   return `<div class="${itemClass}">
-    <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">
+    <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy"><span class="pin-flag">⚑</span>
     <span class="pr-number">${item.number}</span>
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
-        <span class="pr-badge badge-issue">Issue</span>${unreadBadge}
+        <span class="pr-chips"><span class="pr-badge badge-issue">Issue</span>${unreadBadge}</span>
       </div>
       <div class="pr-meta">
         <span class="pr-repo">${escapeHtml(item.repo)}</span>
@@ -324,6 +359,7 @@ function renderIssue(item) {
       </div>
       ${activitySection}
     </div>
+    ${rowRail(item, "", hasActivity)}
   </div>`;
 }
 
@@ -412,10 +448,16 @@ Promise.all([
     // Prune read markers for PRs no longer in any open list
     const allOpenUrls = new Set([...data.to_review, ...data.open_prs, ...(data.reviewed_open || []), ...(data.issues || []), ...(data.mentions || [])].map(pr => pr.url));
     const staleMarkers = getReadMarkers();
+    const openByUrl = new Map([...data.to_review, ...data.open_prs, ...(data.reviewed_open || []), ...(data.issues || []), ...(data.mentions || [])].map(pr => [pr.url, pr]));
     Object.keys(staleMarkers).forEach(url => {
-      if (!allOpenUrls.has(url)) { delete staleMarkers[url]; }
+      if (!allOpenUrls.has(url)) { delete staleMarkers[url]; return; }
+      // A pin clears itself once you have acted on the item since pinning it.
+      if (staleMarkers[url].pinned_at && !pinStillHolds(staleMarkers[url], openByUrl.get(url), DASHBOARD_USER)) {
+        delete staleMarkers[url].pinned_at;
+        if (!Object.keys(staleMarkers[url]).length) delete staleMarkers[url];
+      }
     });
-    localStorage.setItem(READ_MARKERS_KEY, JSON.stringify(staleMarkers));
+    saveReadMarkers(staleMarkers);
 
     // Dark board: each card's big number is what the tab wants from you, lit
     // only while it is above zero; the caption is the tab's total. The color
@@ -427,35 +469,45 @@ Promise.all([
       document.getElementById(`sub-${tab}`).textContent = caption || "";
       card.classList.toggle("lit", !!lit);
     }
+    const pinnedUrl = (i) => isPinnedUrl(i.url);
     function unreadCount(items) {
-      return (items || []).filter(i => getUnreadActivity(i, DASHBOARD_USER).some(a => a.type !== "commit")).length;
+      return (items || []).filter(i => pinnedUrl(i) || getUnreadActivity(i, DASHBOARD_USER).some(a => a.type !== "commit")).length;
     }
+    function pinnedCount(items) { return (items || []).filter(pinnedUrl).length; }
+    // Caption: the tab's total with its unit, naming pins when there are any.
+    const caption = (items, unit) => { const p = pinnedCount(items); return `${(items || []).length} ${unit}${p ? ` · ${p} pinned` : ""}`; };
     function updateCards() {
       const overrides = getOverrides();
       const moved = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open");
       const review = data.to_review.filter(pr => overrides[pr.url] !== "reviewed-open");
       const reviewedOpen = [...moved, ...(data.reviewed_open || []).filter(pr => !moved.some(m => m.url === pr.url))];
       const mine = {
-        review: countActionable(review, triageOpts("review")),
-        "reviewed-open": countActionable(reviewedOpen, triageOpts("reviewed-open")),
-        open: countActionable(data.open_prs, triageOpts("open")),
+        review: countActionable(review, triageOpts("review"), pinnedUrl),
+        "reviewed-open": countActionable(reviewedOpen, triageOpts("reviewed-open"), pinnedUrl),
+        open: countActionable(data.open_prs, triageOpts("open"), pinnedUrl),
       };
-      setCard("review", mine.review, mine.review > 0, `${review.length} PRs open`);
-      setCard("reviewed-open", mine["reviewed-open"], mine["reviewed-open"] > 0, `${reviewedOpen.length} PRs open`);
-      setCard("open", mine.open, mine.open > 0, `${data.open_prs.length} PRs open`);
+      setCard("review", mine.review, mine.review > 0, caption(review, "PRs open"));
+      setCard("reviewed-open", mine["reviewed-open"], mine["reviewed-open"] > 0, caption(reviewedOpen, "PRs open"));
+      setCard("open", mine.open, mine.open > 0, caption(data.open_prs, "PRs open"));
       const newMentions = unreadCount(data.mentions);
-      setCard("mentions", newMentions, newMentions > 0, `${(data.mentions || []).length} open`);
+      setCard("mentions", newMentions, newMentions > 0, caption(data.mentions, "open"));
       const newIssues = unreadCount(data.issues);
-      setCard("issues", newIssues, newIssues > 0, `${(data.issues || []).length} issues open`);
+      setCard("issues", newIssues, newIssues > 0, caption(data.issues, "issues open"));
       setCard("reviewed", data.counts.reviewed_by || 0, false, "");
       setCard("closed", data.counts.closed, false, "");
     }
     updateCards();
 
-    function refreshAll() { updateCards(); renderReview(); renderReviewedOpen(); }
+    function refreshAll() { updateCards(); renderReview(); renderReviewedOpen(); renderOpen(); renderMentions(); renderIssues(); }
 
     document.getElementById("reset-overrides").addEventListener("click", () => {
+      const marks = getReadMarkers();
+      const pins = Object.values(marks).filter(m => m.pinned_at).length;
+      const reads = Object.values(marks).filter(m => m.read_at).length;
+      const moves = Object.keys(getOverrides()).length;
+      if (!confirm(`Clear your local marks? ${moves} tab moves, ${reads} read marks, ${pins} pins.`)) return;
       localStorage.removeItem(OVERRIDES_KEY);
+      localStorage.removeItem(READ_MARKERS_KEY);
       refreshAll();
     });
 
@@ -467,7 +519,7 @@ Promise.all([
       filtered = sortPRs(filtered, sort, triageOpts("review"));
       document.getElementById("list-review").innerHTML = filtered.length
         ? filtered.map(pr => renderPR(pr, "review",
-            `<button class="move-btn" data-url="${escapeAttr(pr.url)}" data-action="mark-reviewed">✓ Reviewed</button>`
+            `<button class="rail-btn" data-url="${escapeAttr(pr.url)}" data-action="mark-reviewed" title="Reviewed: move to the Reviewing tab">✓</button>`
           )).join("")
         : `<div class="loading">No PRs match the filter</div>`;
       document.getElementById("section-count-review").textContent = `${filtered.length} open`;
@@ -488,7 +540,7 @@ Promise.all([
         ? filtered.map(pr => {
             const isManual = overrides[pr.url] === "reviewed-open";
             const btn = isManual
-              ? `<button class="move-btn" data-url="${escapeAttr(pr.url)}" data-action="undo-reviewed">↩ Undo</button>`
+              ? `<button class="rail-btn" data-url="${escapeAttr(pr.url)}" data-action="undo-reviewed" title="Undo: move back to To Review">↩</button>`
               : "";
             return renderPR(pr, "reviewed-open", btn);
           }).join("")
@@ -638,10 +690,13 @@ Promise.all([
         }
         return;
       }
-      const markBtn = e.target.closest(".mark-read-btn");
+      const markBtn = e.target.closest(".mark-read-btn, .rail-btn[data-action=mark-read], .rail-btn[data-action=mark-unread], .rail-btn[data-action=pin], .rail-btn[data-action=unpin]");
       if (markBtn) {
         e.stopPropagation();
-        setReadMarker(markBtn.dataset.url);
+        const action = markBtn.dataset.action || "mark-read";
+        if (action === "mark-read") setReadMarker(markBtn.dataset.url);
+        else if (action === "mark-unread") clearReadMarker(markBtn.dataset.url);
+        else setPin(markBtn.dataset.url, action === "pin");
         updateCards(); renderReview(); renderReviewedOpen(); renderOpen(); renderMentions(); renderIssues();
         return;
       }
