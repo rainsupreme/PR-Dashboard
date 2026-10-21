@@ -32,7 +32,9 @@ the number is above zero. Color applies only to lit cards (see README).
 
 - **GitHub Pages via `deploy-pages` action** — no commit-back, artifact-based deployment
 - **Data separated from markup** — `data/prs.json` is fetched at runtime via `fetch()`
-- **Daily refresh via GitHub Actions** — cron at `0 16 * * *` (9 AM PDT), also on push and manual dispatch
+- **Refresh cadence** — the hourly `schedule:` is the floor (GitHub throttles it to 3-6 h on quiet repos); `contrib/systemd/` holds an optional user timer that runs `gh workflow run update.yml` every 15 min on top of it; the workflow also runs on push and manual dispatch
+- **Incremental fetch** — the fetcher loads the deployed `data/prs.json` (`PRIOR_DATA_URL`, or a local `data/prs.json`) as the prior run; `reuseActivity()` keeps an item's activity when its search `updated_at` is unchanged and the cached copy (`activity_fetched_at`) is under 6 h old, `reuseCI()` keeps `ci_jobs` when `head_oid` and a settled `ci_rollup` are unchanged; GraphQL signals are never cached. Signals are fetched before activity so they can key the CI cache
+- **Live page** — `scripts/dashboard.js` polls `data/prs.json` every 2 min and on `visibilitychange`; a new `updated` is swapped in by `applyData()` without a reload (filters, repo chips, open activity sections preserved; `buildRepoCheckboxes()` is idempotent and only appends new repos). The header always shows the data age (`dataAgeLabel()` in `scripts/utils.js`, ticked every 30 s); the stale banner threshold is `config.json` `stale_after_minutes` (default 6 h for schedule-only installs, 45 here with the timer), re-evaluated on every poll and tick
 - **Future-proofed `data/` directory** — additional data files can be added later
 - **No external dependencies** — no frameworks, no CDN calls
 - **Self-hosted font** — `fonts/BigShouldersDisplay-Bold.woff2` (OFL, latin subset) for the PR-number column; no webfont CDN
@@ -129,7 +131,7 @@ history scan is ~120 points.
 1. Push this repo to GitHub
 2. Enable GitHub Pages (Settings > Pages > Source: **GitHub Actions**)
 3. The `GITHUB_TOKEN` is automatically available to Actions — no secrets needed
-4. The workflow runs on push, daily cron, and manual dispatch
+4. The workflow runs on push and manual dispatch; install the `contrib/systemd/` timer on an always-on machine for the 15-minute cadence (README, "Refresh cadence")
 
 ## Fork & Personalize
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Dispatch the PR Dashboard refresh workflow (one workflow_dispatch POST)
+# Needs: gh logged in with the `workflow` scope (gh auth status).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Set to your fork. Everything else happens in GitHub Actions.
+Environment=PR_DASHBOARD_REPO=rainsupreme/PR-Dashboard
+ExecStart=%h/.local/bin/gh workflow run update.yml -R ${PR_DASHBOARD_REPO}
+TimeoutStartSec=60

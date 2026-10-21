@@ -1,0 +1,12 @@
+[Unit]
+Description=Dispatch the PR Dashboard refresh workflow every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+# Spread the fire over a minute so it never lands exactly on a GitHub minute boundary.
+RandomizedDelaySec=60
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -190,3 +190,23 @@ describe("staleAgeLabel", () => {
     assert.equal(staleAgeLabel(3 * 86400000), "3d");
   });
 });
+
+describe("dataAgeLabel", () => {
+  const { dataAgeLabel } = require("../scripts/utils.js");
+  const MIN = 60000;
+  it("rounds down to the unit a glance needs", () => {
+    assert.equal(dataAgeLabel(0), "just now");
+    assert.equal(dataAgeLabel(59 * 1000), "just now");
+    assert.equal(dataAgeLabel(1 * MIN), "1 min ago");
+    assert.equal(dataAgeLabel(59 * MIN + 59000), "59 min ago");
+    assert.equal(dataAgeLabel(60 * MIN), "1h 00m ago");
+    assert.equal(dataAgeLabel(125 * MIN), "2h 05m ago");
+    assert.equal(dataAgeLabel(24 * 60 * MIN), "1d ago");
+    assert.equal(dataAgeLabel(3 * 24 * 60 * MIN + 5 * MIN), "3d ago");
+  });
+  it("is empty for a negative or invalid age", () => {
+    assert.equal(dataAgeLabel(-1), "");
+    assert.equal(dataAgeLabel(NaN), "");
+    assert.equal(dataAgeLabel(undefined), "");
+  });
+});
