@@ -6,8 +6,10 @@ A GitHub Pages dashboard for tracking your pull requests and issues across one o
 
 ## Features
 
-- **To Review** — open PRs requesting your review, with stale badges (> 7 days)
-- **To Follow Up** — PRs you've reviewed that are still open
+- **To Review** — open PRs you are reviewing: requested of you, or already
+  reviewed by you and still open. One list; a chip on each row says which stage
+  it is at (first look, re-review, reply, merge) and a stale badge marks a first
+  request older than 7 days
 - **To Unblock** — your open PRs
 - **Unread Mentions** — issues/PRs where you're @mentioned and not already on another tab
 - **Unread Issues** — issues assigned to you or opened by you
@@ -31,20 +33,19 @@ Other features:
 
 The stat cards work like a dark board: a card's big number is what that tab
 wants from you, and it is grey until that number is above zero, so each card
-reads as a sentence (`0 To Unblock · 19 PRs open`). **To Review** counts review
-requests you can act on now; **To Follow Up** counts PRs you reviewed that are
-*your move* again (a re-review, a reply, a stale approval to re-check, a merge);
-**To Unblock** counts your own PRs that are waiting on you (CI, conflicts,
+reads as a sentence (`0 To Unblock · 19 PRs open`). **To Review** counts the
+PRs you are reviewing that are *your move* now (a first look you can act on, a
+re-review, a reply, a stale approval to re-check, a merge); **To Unblock** counts your own PRs that are waiting on you (CI, conflicts,
 requested changes, a reply, a reviewer to find, a merge); **Unread Mentions** and
 **Unread Issues** count unread activity. The tab's total sits in the caption
 (`15 PRs open`, plus `· N pinned` when you have pinned rows). A lit card means act; a row of grey numbers
 means nothing is waiting on you. **Mentions** lists only items not already on
 another tab, and counts as new everything since the comment that mentioned you
 (or since your reply to it). **Reviewed** and **Done** are history and never light up.
-The lit color says which hat: yellow = act now, blue = your reviewer hat,
-green = your author hat, purple = peripheral.
+The lit color says which hat: blue = your reviewer hat, green = your author
+hat, purple = peripheral.
 
-Your in-flight PRs (**To Review**, **To Follow Up** and **To Unblock**) are enriched via the GitHub GraphQL API, and every row carries one chip
+Your in-flight PRs (**To Review** and **To Unblock**) are enriched via the GitHub GraphQL API, and every row carries one chip
 that says *whose move it is*, relative to you:
 
 | Chip | Meaning |
@@ -53,23 +54,25 @@ that says *whose move it is*, relative to you:
 | **? find a reviewer** | Nobody has engaged: no review, no review request. Also your move, and the easiest one to forget. |
 | **nudge a committer** | Approved on the current head, green and mergeable, but you can't merge here. |
 | **waiting on @name · Nd** | Their move: a reviewer owes a look (requested, or their verdict predates the head, or you answered their thread last). Dimmed. |
-| **author's move** | On a PR you reviewed: CI red, conflicts, or changes requested. Dimmed. |
+| **author rebasing / author fixing CI / addressing another review / address N bot threads / review bot: not ready / author's move** | Their move: the author has something to do before a review is worth your time. Dimmed. See *Not ready for a human yet* below. |
+| **CI awaits approval** | A first-time contributor's workflows wait for a maintainer to approve the run. Where you can merge, this is **→ approve CI run**, your move. |
 | **queued for merge** | Carries a merge label and is healthy. Dimmed. |
 
 Every in-flight row also has a small **rail** on its right edge with the row's
-manual controls, in the same place at every width: move to Reviewing (✓ / ↩
-on the review tabs), **mark read** (✓, or ↩ to mark unread again) and **pin** (⚑).
+manual controls, in the same place at every width: **mark read** (✓, or ↩ to
+mark unread again) and **pin** (⚑).
 A read mark is a statement about the past: new activity after it shows as new
 again. A pin is a promise to act: the row stays bright, gets a bar on its left
 edge and a flag on the avatar, counts toward the card's lit number, and clears
 only when *you* act on the item (comment, review, push) or it closes. Both are
 stored in your browser (localStorage), so they are per device; the reset button
-in the header clears them along with the tab moves. On phones the avatar, number
+in the header clears them. On phones the avatar, number
 and title form a header row and the chips, meta and rail flow beneath.
 
 Beside it, the specific state chips: ✓ approved (or *approved (older head)*),
-✗ changes requested, ✗ CI failing, ⊘ CI cancelled, ⚠ conflicts, and the
-unresolved threads split into *N awaiting you* / *N awaiting them* / *N bot*.
+✗ changes requested, ✗ CI failing, ⊘ CI cancelled, ⊘ CI awaits approval,
+⚠ conflicts, and the unresolved threads split into *N awaiting you* /
+*N awaiting them* / *N bot*.
 CI is also shown as per-job dots.
 
 ### Why not GitHub's own fields?
@@ -97,19 +100,47 @@ So the dashboard derives the turn itself:
 
 Time is shown (`· 12d`) but is never an input to whose move it is.
 
-These feed the **Triage (needs action)** sort, the default on the three tabs
+These feed the **Triage (needs action)** sort, the default on both tabs
 (chronological sorts remain as options). The ladder differs by tab because your
 relationship to the PR differs:
 
-- **Authored** (you are the author): queued-but-broken > CI failing >
+- **To Unblock** (you are the author): queued-but-broken > CI failing >
   changes requested > conflicts > threads awaiting you > find a reviewer > ready
   to land > cancelled CI > queued > waiting on a reviewer.
-- **Reviewing** (you reviewed): review requested of you > author replied
-  in your thread > *author's move if broken* > re-review after a push > re-check
-  a stale approval > re-look after a comment-only review > merge (or nudge) >
+- **To Review** (you are a reviewer): the author's blockers come first, since
+  a look at a PR the author is about to change is wasted -- draft > a reply in
+  your own thread (cheap, so it jumps the queue) > conflicts > CI failing > CI
+  awaiting approval > another reviewer's changes requested > unacknowledged bot
+  threads > review bot says not ready. Then what you owe: re-review requested >
+  re-review after a push > re-check a stale approval > re-look after a
+  comment-only review > first review (bumped after 7 days) > merge (or nudge) >
   waiting on others.
-- **To Review**: your review, unless the author has CI or conflicts to
-  fix first; a request older than 7 days is bumped.
+
+### Not ready for a human yet
+
+A reviewer's time is the scarce resource, so a PR drops out of your lit count
+while its author still has something to do. Two of those signals come from
+bots:
+
+- **Unacknowledged bot threads.** An unresolved review thread whose last word
+  is a bot's (CodeRabbit, the Valkey review bot) counts as feedback the author
+  has not looked at. Any acknowledgement clears it: a reply, a reaction on the
+  bot's comment, resolving the thread, or a push after the bot spoke. Addressing
+  or explicitly declining bot feedback is itself a positive signal to a human
+  reviewer; a wall of untouched bot threads says the PR is not ready for one.
+- **The review bot's verdict.** `valkey-review-bot` keeps one *Review state*
+  comment per PR (marked `<!-- valkey-reviewer:state -->`) with a bold verdict.
+  Only **Not ready for human review yet** is used, as a demotion; **Ready** is
+  nearly universal and carries no information, so it changes nothing. The
+  verdict is ignored when it names an older head or was last edited before the
+  latest push, and any parse failure means no signal.
+
+Neither demotion is permanent: the row stays on the tab, dimmed, with the chip
+naming what the author owes, and it lights again as soon as the author moves.
+To decline a review, remove yourself as a reviewer on GitHub (ideally with a
+note saying why); that is the one action the author and other reviewers can
+see, and the dashboard follows it on the next fetch. There is no local "mark
+reviewed".
 
 ## Merge labels and merge access
 

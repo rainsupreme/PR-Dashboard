@@ -9,8 +9,8 @@ Displays:
 - Your open/in-progress PRs
 - Done (merged/closed) PRs with filtering
 
-The stat cards' tab labels are To Review / To Follow Up / To Unblock / Unread
-Mentions / Unread Issues / Reviewed / Done (each names what its big number counts); the count is set in the self-hosted Big Shoulders
+The stat cards' tab labels are To Review / To Unblock / Unread Mentions /
+Unread Issues / Reviewed / Done (each names what its big number counts); the count is set in the self-hosted Big Shoulders
 Display (`fonts/`). The cards are a dark board: the big number is the tab's
 *your move* count (`countActionable()` in `scripts/utils.js`; unread for Issues
 and Mentions; the plain total for Reviewed and Done), the caption holds the total,
@@ -45,6 +45,7 @@ GitHub Search API (authenticated via `GITHUB_TOKEN` in Actions), per org:
 - `review-requested:<user> is:pr is:open org:<org>`
 - `author:<user> is:pr is:open org:<org>`
 - `author:<user> is:pr is:closed org:<org>`
+- `reviewed-by:<user> is:pr is:open org:<org> -author:<user>`
 - `reviewed-by:<user> is:pr is:closed org:<org> -author:<user>`
 - `mentions:<user> is:open org:<org> -author:<user>`
 - `assignee:<user> is:issue is:open org:<org>`
@@ -52,15 +53,35 @@ GitHub Search API (authenticated via `GITHUB_TOKEN` in Actions), per org:
 
 All queries are paginated (up to 1000 results per query).
 
-In-flight PRs (to-review, your open, reviewed-open) are then enriched per PR:
+The `review-requested` and `reviewed-by ... is:open` searches are unioned by URL
+(`mergeReviewing()`) into one `reviewing` list: a PR asked of you and a PR you
+already reviewed are the same job at different stages, and `whoseMove()` says
+which. There is no manual "mark reviewed"; declining a review is done on GitHub
+by removing yourself as reviewer, which the next fetch reflects.
+
+In-flight PRs (reviewing, your open) are then enriched per PR:
 REST for commits / reviews / comments / check-runs (activity feed + CI dots), and
 one GraphQL query (`PR_SIGNALS_QUERY`) for `headRefOid`, per-review commit oids,
 review requests, each unresolved thread's opener and last commenter, and the
 status-check rollup. `mapSignals()` in `scripts/fetch-prs.js` turns that into
 flat turn-aware fields (`waiting_on`, `approvals_current`, `approvals_stale`,
-`changes_requested`, `threads_awaiting_me`, `my_review`, `my_review_stale`,
-`my_last_look`, ...); `whoseMove()` in `scripts/utils.js` ranks them per tab.
-GitHub's `reviewDecision` is kept for display only: it is sticky across pushes.
+`changes_requested`, `threads_awaiting_me`, `threads_bot`, `my_review`,
+`my_review_stale`, `my_last_look`, ...); `whoseMove()` in `scripts/utils.js`
+ranks them per tab. GitHub's `reviewDecision` is kept for display only: it is
+sticky across pushes.
+
+`threads_bot` counts unresolved threads whose last word is a bot's and that the
+author has not acknowledged: the thread's last comment carries `createdAt` and
+`reactions.totalCount`, and the head commit carries `committedDate`, so a push
+after the bot spoke or a reaction on its comment drops the thread from the
+count. `botVerdict()` in `scripts/fetch-prs.js` reads the Valkey review bot's
+`<!-- valkey-reviewer:state -->` issue comment from the REST comments already
+fetched for the activity feed and sets `bot_verdict` to `not-ready` / `ready` /
+`""`; it fails open (no marker, no bold verdict, a named sha that is not a
+prefix of the head, or an edit older than `last_push` all give `""`). Only
+`not-ready` is used by `whoseMove()`. `fetchCIStatus()` maps a check-run
+conclusion of `action_required` to its own `ci_jobs[].status`, and `ciState()`
+reports it as `"action_required"` (below `cancelled`, above `pending`).
 
 Mentions come from one `mentions:<user> is:open` search per org. `dedupeMentions()`
 drops any already on To Review / Reviewing / Authored / Issues, and the survivors
@@ -71,9 +92,10 @@ honors `unread_anchor` ahead of its author-based defaults.
 
 Local marks live in localStorage under `dashboard-read-markers` as
 `{ url: { read_at, pinned_at } }` (`normalizeMarker()` also accepts the older
-bare-timestamp value). `rowRail()` renders the per-row controls (tab move, read/
-unread, pin); a document-level click handler applies them and re-renders every
-tab. `pinStillHolds()` clears a pin once `myLastAction()` (the user's latest
+bare-timestamp value). `rowRail()` renders the per-row controls (read/unread,
+pin); a document-level click handler applies them and re-renders every tab. The
+header reset also removes the legacy `dashboard-overrides` key from the days when
+tab moves were a local override. `pinStillHolds()` clears a pin once `myLastAction()` (the user's latest
 comment/review/commit, or push on their own PR) is later than `pinned_at`; the
 prune pass at load applies it and drops marks for closed items. `countActionable()`
 takes an `isPinned` predicate so pinned rows light the card. Below 600px `.pr-item`

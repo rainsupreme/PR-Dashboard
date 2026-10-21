@@ -48,7 +48,9 @@ function escapeHtml(str) {
   return el.innerHTML;
 }
 
-const OVERRIDES_KEY = "dashboard-overrides";
+// Earlier versions kept manual tab moves under this key; the reset button
+// still clears it so a stale entry cannot linger.
+const LEGACY_OVERRIDES_KEY = "dashboard-overrides";
 let DASHBOARD_USER = "";
 let DASHBOARD_MERGE_LABELS = ["to-be-merged"];
 // Orgs / repos where the dashboard user can merge (config.json merge_access).
@@ -81,16 +83,6 @@ function labelTextColor(hex) {
   const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return lum > 0.6 ? "#1f2328" : "#ffffff";
 }
-function getOverrides() {
-  try { return JSON.parse(localStorage.getItem(OVERRIDES_KEY)) || {}; } catch { return {}; }
-}
-function setOverride(url, target) {
-  const o = getOverrides();
-  if (target) o[url] = target;
-  else delete o[url];
-  localStorage.setItem(OVERRIDES_KEY, JSON.stringify(o));
-}
-
 // Local marks per URL: { read_at, pinned_at }. read_at is a statement about
 // the past (new activity after it shows as new again); pinned_at is a promise
 // to act (cleared only by your own action on the item, or the item closing).
@@ -184,7 +176,7 @@ function buildActivity(item, type) {
 
 // The row's manual controls, stacked on the right edge: the tab move button
 // (passed in by the tab that renders the row), read/unread, and pin.
-function rowRail(item, moveBtn, hasActivity) {
+function rowRail(item, hasActivity) {
   const url = escapeAttr(item.url);
   const marker = getReadMarkers()[item.url] || {};
   const pinned = !!marker.pinned_at;
@@ -195,10 +187,10 @@ function rowRail(item, moveBtn, hasActivity) {
   const pinBtn = pinned
     ? `<button class="rail-btn on" data-url="${url}" data-action="unpin" title="Pinned: stays bright until you act on it. Click to unpin.">⚑</button>`
     : `<button class="rail-btn" data-url="${url}" data-action="pin" title="Pin: keep bright until you act on it">⚑</button>`;
-  return `<div class="row-rail">${moveBtn || ""}${readBtn}${pinBtn}</div>`;
+  return `<div class="row-rail">${readBtn}${pinBtn}</div>`;
 }
 
-function renderPR(pr, type, moveBtn) {
+function renderPR(pr, type) {
   let badge = "";
   if (type === "closed") {
     badge = pr.merged
@@ -207,11 +199,14 @@ function renderPR(pr, type, moveBtn) {
   } else if (pr.draft) {
     badge = `<span class="pr-badge badge-draft">✏ Draft</span>`;
   }
-  const age = (type === "review") ? daysOld(pr.created) : 0;
+  // How long a first request has waited on me. Only while it is still my
+  // first look: once I have reviewed, or while the author owes something, the
+  // age says nothing about me.
+  const move = type !== "closed" ? whoseMove(pr, triageOpts(type)) : null;
+  const age = (type === "reviewing" && move && move.action === "review") ? daysOld(pr.created) : 0;
   const staleBadge = age > 7 ? `<span class="pr-badge badge-stale">${age}d waiting</span>` : "";
   const dateLabel = type === "closed" ? `closed ${timeAgo(pr.closed)}` : `updated ${timeAgo(pr.updated)}`;
-  const authorLine = type === "review" ? `<span>@${escapeHtml(pr.author)}</span>` : "";
-  const moveBtnHtml = moveBtn || "";
+  const authorLine = type === "reviewing" ? `<span>@${escapeHtml(pr.author)}</span>` : "";
 
   const { hasActivity, hasUnread, unreadBadge, activitySection, toggleBtn } = buildActivity(pr, type);
 
@@ -219,7 +214,7 @@ function renderPR(pr, type, moveBtn) {
   // if the rail clips under space pressure, the important ones stay visible.
   let ciDots = "";
   if (pr.ci_jobs && pr.ci_jobs.length > 0 && type !== "closed") {
-    const rank = { failure: 0, cancelled: 1, pending: 2, success: 3 };
+    const rank = { failure: 0, cancelled: 1, action_required: 2, pending: 3, success: 4 };
     const sorted = [...pr.ci_jobs].sort((a, b) => (rank[a.status] ?? 4) - (rank[b.status] ?? 4));
     ciDots = sorted.map(job => {
       const cls = `ci-dot ci-${job.status}`;
@@ -232,7 +227,6 @@ function renderPR(pr, type, moveBtn) {
   // from you. Followed by the specific state chips that explain it.
   let moveChip = "";
   let signalBadges = "";
-  const move = type !== "closed" ? whoseMove(pr, triageOpts(type)) : null;
   if (move && move.action && move.action !== "draft") { // the Draft badge already says it
     let text = escapeHtml(move.action);
     if (move.owner === "them" && move.who.length > 0) {
@@ -255,6 +249,7 @@ function renderPR(pr, type, moveBtn) {
       const ci = ciState(pr);
       if (ci === "failure") parts.push(`<span class="pr-badge badge-ci-fail">✗ CI failing</span>`);
       else if (ci === "cancelled") parts.push(`<span class="pr-badge badge-ci-cancelled">⊘ CI cancelled</span>`);
+      else if (ci === "action_required") parts.push(`<span class="pr-badge badge-ci-cancelled" title="First-time contributor: a maintainer must approve the workflow run">⊘ CI awaits approval</span>`);
       if (pr.mergeable === "CONFLICTING") parts.push(`<span class="pr-badge badge-conflict">⚠ conflicts</span>`);
     }
     if ((pr.threads_awaiting_me || 0) > 0) {
@@ -285,7 +280,7 @@ function renderPR(pr, type, moveBtn) {
   const pinned = type !== "closed" && isPinnedUrl(pr.url);
   const quiet = hasActivity && !hasUnread && !actionable && !pinned;
   const itemClass = `pr-item${quiet ? " pr-quiet" : ""}${pinned ? " pinned" : ""}`;
-  const rail = type !== "closed" ? rowRail(pr, moveBtnHtml, hasActivity) : "";
+  const rail = type !== "closed" ? rowRail(pr, hasActivity) : "";
 
   return `<div class="${itemClass}">
     <img class="pr-avatar" src="${escapeAttr(pr.avatar)}" alt="" loading="lazy"><span class="pin-flag">⚑</span>
@@ -335,7 +330,7 @@ function renderMention(item) {
       </div>
       ${activitySection}
     </div>
-    ${rowRail(item, "", hasActivity)}
+    ${rowRail(item, hasActivity)}
   </div>`;
 }
 
@@ -359,7 +354,7 @@ function renderIssue(item) {
       </div>
       ${activitySection}
     </div>
-    ${rowRail(item, "", hasActivity)}
+    ${rowRail(item, hasActivity)}
   </div>`;
 }
 
@@ -406,7 +401,7 @@ function getSelectedRepos(containerId) {
 Promise.all([
   fetch("config.json").then(r => { if (!r.ok) throw new Error("config.json not found"); return r.json(); }),
   fetch("data/prs.json").then(r => {
-    if (!r.ok) return { github_user: "", orgs: [], updated: "", to_review: [], open_prs: [], closed_prs: [], reviewed_by: [], mentions: [], issues: [], counts: { to_review: 0, open: 0, closed: 0, reviewed_by: 0, mentions: 0, issues: 0 } };
+    if (!r.ok) return { github_user: "", orgs: [], updated: "", reviewing: [], open_prs: [], closed_prs: [], reviewed_by: [], mentions: [], issues: [], counts: { reviewing: 0, open: 0, closed: 0, reviewed_by: 0, mentions: 0, issues: 0 } };
     return r.json();
   })
 ])
@@ -439,16 +434,13 @@ Promise.all([
       });
     }
 
-    const staleOverrides = getOverrides();
-    const reviewUrls = new Set(data.to_review.map(pr => pr.url));
-    Object.keys(staleOverrides).forEach(url => {
-      if (!reviewUrls.has(url)) setOverride(url, null);
-    });
+    const reviewing = data.reviewing || [];
 
     // Prune read markers for PRs no longer in any open list
-    const allOpenUrls = new Set([...data.to_review, ...data.open_prs, ...(data.reviewed_open || []), ...(data.issues || []), ...(data.mentions || [])].map(pr => pr.url));
+    const allOpen = [...reviewing, ...data.open_prs, ...(data.issues || []), ...(data.mentions || [])];
+    const allOpenUrls = new Set(allOpen.map(pr => pr.url));
     const staleMarkers = getReadMarkers();
-    const openByUrl = new Map([...data.to_review, ...data.open_prs, ...(data.reviewed_open || []), ...(data.issues || []), ...(data.mentions || [])].map(pr => [pr.url, pr]));
+    const openByUrl = new Map(allOpen.map(pr => [pr.url, pr]));
     Object.keys(staleMarkers).forEach(url => {
       if (!allOpenUrls.has(url)) { delete staleMarkers[url]; return; }
       // A pin clears itself once you have acted on the item since pinning it.
@@ -477,17 +469,11 @@ Promise.all([
     // Caption: the tab's total with its unit, naming pins when there are any.
     const caption = (items, unit) => { const p = pinnedCount(items); return `${(items || []).length} ${unit}${p ? ` · ${p} pinned` : ""}`; };
     function updateCards() {
-      const overrides = getOverrides();
-      const moved = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open");
-      const review = data.to_review.filter(pr => overrides[pr.url] !== "reviewed-open");
-      const reviewedOpen = [...moved, ...(data.reviewed_open || []).filter(pr => !moved.some(m => m.url === pr.url))];
       const mine = {
-        review: countActionable(review, triageOpts("review"), pinnedUrl),
-        "reviewed-open": countActionable(reviewedOpen, triageOpts("reviewed-open"), pinnedUrl),
+        reviewing: countActionable(reviewing, triageOpts("reviewing"), pinnedUrl),
         open: countActionable(data.open_prs, triageOpts("open"), pinnedUrl),
       };
-      setCard("review", mine.review, mine.review > 0, caption(review, "PRs open"));
-      setCard("reviewed-open", mine["reviewed-open"], mine["reviewed-open"] > 0, caption(reviewedOpen, "PRs open"));
+      setCard("reviewing", mine.reviewing, mine.reviewing > 0, caption(reviewing, "PRs open"));
       setCard("open", mine.open, mine.open > 0, caption(data.open_prs, "PRs open"));
       const newMentions = unreadCount(data.mentions);
       setCard("mentions", newMentions, newMentions > 0, caption(data.mentions, "open"));
@@ -498,57 +484,27 @@ Promise.all([
     }
     updateCards();
 
-    function refreshAll() { updateCards(); renderReview(); renderReviewedOpen(); renderOpen(); renderMentions(); renderIssues(); }
+    function refreshAll() { updateCards(); renderReviewing(); renderOpen(); renderMentions(); renderIssues(); }
 
-    document.getElementById("reset-overrides").addEventListener("click", () => {
+    document.getElementById("reset-marks").addEventListener("click", () => {
       const marks = getReadMarkers();
       const pins = Object.values(marks).filter(m => m.pinned_at).length;
       const reads = Object.values(marks).filter(m => m.read_at).length;
-      const moves = Object.keys(getOverrides()).length;
-      if (!confirm(`Clear your local marks? ${moves} tab moves, ${reads} read marks, ${pins} pins.`)) return;
-      localStorage.removeItem(OVERRIDES_KEY);
+      if (!confirm(`Clear your local marks? ${reads} read marks, ${pins} pins.`)) return;
+      localStorage.removeItem(LEGACY_OVERRIDES_KEY);
       localStorage.removeItem(READ_MARKERS_KEY);
       refreshAll();
     });
 
-    let renderReview = () => {
-      const overrides = getOverrides();
-      const repos = getSelectedRepos("repo-checkboxes-review");
-      const sort = document.getElementById("filter-review-sort").value;
-      let filtered = data.to_review.filter(pr => repos.has(pr.repo) && overrides[pr.url] !== "reviewed-open");
-      filtered = sortPRs(filtered, sort, triageOpts("review"));
-      document.getElementById("list-review").innerHTML = filtered.length
-        ? filtered.map(pr => renderPR(pr, "review",
-            `<button class="rail-btn" data-url="${escapeAttr(pr.url)}" data-action="mark-reviewed" title="Reviewed: move to the Reviewing tab">✓</button>`
-          )).join("")
+    let renderReviewing = () => {
+      const repos = getSelectedRepos("repo-checkboxes-reviewing");
+      const sort = document.getElementById("filter-reviewing-sort").value;
+      let filtered = reviewing.filter(pr => repos.has(pr.repo));
+      filtered = sortPRs(filtered, sort, triageOpts("reviewing"));
+      document.getElementById("list-reviewing").innerHTML = filtered.length
+        ? filtered.map(pr => renderPR(pr, "reviewing")).join("")
         : `<div class="loading">No PRs match the filter</div>`;
-      document.getElementById("section-count-review").textContent = `${filtered.length} open`;
-      document.getElementById("list-review").querySelectorAll("[data-action=mark-reviewed]").forEach(btn => {
-        btn.addEventListener("click", (e) => { e.stopPropagation(); setOverride(btn.dataset.url, "reviewed-open"); refreshAll(); });
-      });
-    };
-
-    let renderReviewedOpen = () => {
-      const overrides = getOverrides();
-      const repos = getSelectedRepos("repo-checkboxes-reviewed-open");
-      const sort = document.getElementById("filter-reviewed-open-sort").value;
-      const movedFromReview = data.to_review.filter(pr => overrides[pr.url] === "reviewed-open" && repos.has(pr.repo));
-      let filtered = (data.reviewed_open || []).filter(pr => repos.has(pr.repo));
-      filtered = [...movedFromReview, ...filtered.filter(pr => !movedFromReview.some(m => m.url === pr.url))];
-      filtered = sortPRs(filtered, sort, triageOpts("reviewed-open"));
-      document.getElementById("list-reviewed-open").innerHTML = filtered.length
-        ? filtered.map(pr => {
-            const isManual = overrides[pr.url] === "reviewed-open";
-            const btn = isManual
-              ? `<button class="rail-btn" data-url="${escapeAttr(pr.url)}" data-action="undo-reviewed" title="Undo: move back to To Review">↩</button>`
-              : "";
-            return renderPR(pr, "reviewed-open", btn);
-          }).join("")
-        : `<div class="loading">No PRs match the filter</div>`;
-      document.getElementById("section-count-reviewed-open").textContent = `${filtered.length} open`;
-      document.getElementById("list-reviewed-open").querySelectorAll("[data-action=undo-reviewed]").forEach(btn => {
-        btn.addEventListener("click", (e) => { e.stopPropagation(); setOverride(btn.dataset.url, null); refreshAll(); });
-      });
+      document.getElementById("section-count-reviewing").textContent = `${filtered.length} open`;
     };
 
     let renderOpen = () => {
@@ -623,16 +579,14 @@ Promise.all([
       document.getElementById("section-count-closed").textContent = `${filtered.length} of ${data.counts.closed}`;
     };
 
-    buildRepoCheckboxes("repo-checkboxes-review", data.to_review, renderReview);
-    buildRepoCheckboxes("repo-checkboxes-reviewed-open", data.reviewed_open || [], renderReviewedOpen);
+    buildRepoCheckboxes("repo-checkboxes-reviewing", reviewing, renderReviewing);
     buildRepoCheckboxes("repo-checkboxes-open", data.open_prs, renderOpen);
     buildRepoCheckboxes("repo-checkboxes-mentions", data.mentions || [], renderMentions);
     buildRepoCheckboxes("repo-checkboxes-issues", data.issues || [], renderIssues);
     buildRepoCheckboxes("repo-checkboxes-reviewed", data.reviewed_by || [], renderReviewed);
     buildRepoCheckboxes("repo-checkboxes-closed", data.closed_prs, renderClosed);
 
-    document.getElementById("filter-review-sort").addEventListener("change", renderReview);
-    document.getElementById("filter-reviewed-open-sort").addEventListener("change", renderReviewedOpen);
+    document.getElementById("filter-reviewing-sort").addEventListener("change", renderReviewing);
     document.getElementById("filter-open-sort").addEventListener("change", renderOpen);
     document.getElementById("filter-mentions-type").addEventListener("change", renderMentions);
     document.getElementById("filter-issues-type").addEventListener("change", renderIssues);
@@ -671,12 +625,11 @@ Promise.all([
     }
 
     // Run after initial render and re-run after re-renders
-    const origRenderReview = renderReview, origRenderOpen = renderOpen, origRenderReviewedOpen = renderReviewedOpen;
+    const origRenderReviewing = renderReviewing, origRenderOpen = renderOpen;
     const withExpandBtn = (fn) => () => { fn(); addExpandAllButtons(); };
-    renderReview = withExpandBtn(origRenderReview);
+    renderReviewing = withExpandBtn(origRenderReviewing);
     renderOpen = withExpandBtn(origRenderOpen);
-    renderReviewedOpen = withExpandBtn(origRenderReviewedOpen);
-    renderReview(); renderOpen(); renderReviewedOpen();
+    renderReviewing(); renderOpen();
 
     // Event delegation for activity toggles and mark-read buttons
     document.addEventListener("click", (e) => {
@@ -697,7 +650,7 @@ Promise.all([
         if (action === "mark-read") setReadMarker(markBtn.dataset.url);
         else if (action === "mark-unread") clearReadMarker(markBtn.dataset.url);
         else setPin(markBtn.dataset.url, action === "pin");
-        updateCards(); renderReview(); renderReviewedOpen(); renderOpen(); renderMentions(); renderIssues();
+        refreshAll();
         return;
       }
     });
