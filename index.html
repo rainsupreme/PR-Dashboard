@@ -105,6 +105,13 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .pr-title { font-size: 14px; font-weight: 600; color: var(--color-fg-default); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-title:hover { color: var(--color-accent-fg); }
 .pr-number { font-family: 'Big Shoulders Display', 'Oswald', 'Arial Narrow', sans-serif-condensed, sans-serif; font-weight: 700; font-size: 27px; line-height: 40px; min-width: 56px; flex-shrink: 0; color: var(--color-fg-default); font-variant-numeric: tabular-nums; }
+/* Link wrappers are display:contents so the img/number stay direct children of the flex/grid row. */
+.pr-avatar-link, .pr-number-link { display: contents; }
+.pr-avatar-link { cursor: pointer; }
+.pr-number-link { text-decoration: none; }
+.pr-number-link:hover .pr-number { color: var(--color-accent-fg); }
+.pr-author-link { color: inherit; text-decoration: none; }
+.pr-author-link:hover { color: var(--color-accent-fg); text-decoration: underline; }
 .pr-meta { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--color-fg-muted); flex-wrap: wrap; }
 .pr-repo { background: var(--color-neutral-subtle); border-radius: 2em; padding: 1px 8px; font-size: 11px; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; color: var(--color-fg-muted); }
 .pr-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 2em; font-size: 11px; font-weight: 500; }
