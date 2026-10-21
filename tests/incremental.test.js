@@ -77,3 +77,20 @@ describe("reuseCI", () => {
     assert.equal(reuseCI({ ...prior, ci_jobs: undefined }, { head_oid: "abc", ci_rollup: "SUCCESS" }), null);
   });
 });
+
+describe("isRateLimited", () => {
+  const { isRateLimited } = require("../scripts/fetch-prs.js");
+  it("treats 429, Retry-After, an exhausted budget, and a rate-limit body as rate limits", () => {
+    assert.equal(isRateLimited(429, {}, ""), true);
+    assert.equal(isRateLimited(403, { "retry-after": "60" }, ""), true);
+    assert.equal(isRateLimited(403, { "x-ratelimit-remaining": "0" }, ""), true);
+    assert.equal(isRateLimited(403, {}, '{"message":"API rate limit exceeded for installation"}'), true);
+    assert.equal(isRateLimited(403, {}, '{"message":"You have exceeded a secondary rate limit."}'), true);
+  });
+  it("does not retry a permission 403 or any other status", () => {
+    assert.equal(isRateLimited(403, { "x-ratelimit-remaining": "4990" }, '{"message":"Resource not accessible by integration"}'), false);
+    assert.equal(isRateLimited(403, {}, '{"message":"Must have push access to view repository collaborators."}'), false);
+    assert.equal(isRateLimited(404, {}, ""), false);
+    assert.equal(isRateLimited(200, {}, ""), false);
+  });
+});

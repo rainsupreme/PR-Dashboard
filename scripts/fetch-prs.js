@@ -31,6 +31,18 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// GitHub answers both "slow down" and "you may not see this" with 403. Only
+// the first is worth a retry: a permission 403 (GITHUB_TOKEN reading another
+// repo's collaborators) is the same answer every time, and waiting 2/4/8 s
+// before each of three identical refusals cost ~2 min per run.
+function isRateLimited(statusCode, headers = {}, body = "") {
+  if (statusCode === 429) return true;
+  if (statusCode !== 403) return false;
+  if (headers["retry-after"]) return true;
+  if (headers["x-ratelimit-remaining"] === "0") return true;
+  return /rate limit|abuse detection/i.test(body || "");
+}
+
 function request(url, retries = MAX_RETRIES) {
   return new Promise((resolve, reject) => {
     const headers = {
@@ -45,7 +57,7 @@ function request(url, retries = MAX_RETRIES) {
         let body = "";
         res.on("data", (chunk) => (body += chunk));
         res.on("end", async () => {
-          if (res.statusCode === 403 || res.statusCode === 429) {
+          if (isRateLimited(res.statusCode, res.headers, body)) {
             if (retries > 0) {
               const retryAfter = res.headers["retry-after"];
               // A secondary limit without Retry-After asks for "a few minutes";
@@ -1183,7 +1195,7 @@ async function main() {
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { fetchMergerData, monthWindows, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep, priorUsable, priorIndex, reuseActivity, reuseCI, MAX_ACTIVITY_AGE_MS };
+  module.exports = { fetchMergerData, monthWindows, isRateLimited, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep, priorUsable, priorIndex, reuseActivity, reuseCI, MAX_ACTIVITY_AGE_MS };
 }
 
 if (require.main === module) {
