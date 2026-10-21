@@ -17,6 +17,16 @@ const { buildMergerSections } = require("./merger.js");
 const TOKEN = process.env.GITHUB_TOKEN || "";
 const MAX_RETRIES = 3;
 
+// Where the previous run's data/prs.json can be read back (the deployed copy
+// on Pages). Items whose search-result updated_at has not moved reuse their
+// cached activity instead of re-fetching it. Unset: fetch everything.
+const PRIOR_DATA_URL = process.env.PRIOR_DATA_URL || "";
+// Cached activity older than this is re-fetched even when updated_at has not
+// moved, so anything that fails to bump updated_at is wrong for at most this
+// long.
+const MAX_ACTIVITY_AGE_MS = 6 * 60 * 60 * 1000;
+const stats = { rest: 0, graphql: 0 };
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -28,6 +38,7 @@ function request(url, retries = MAX_RETRIES) {
       Accept: "application/vnd.github+json",
     };
     if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
+    stats.rest++;
 
     https
       .get(url, { headers }, (res) => {
@@ -37,7 +48,10 @@ function request(url, retries = MAX_RETRIES) {
           if (res.statusCode === 403 || res.statusCode === 429) {
             if (retries > 0) {
               const retryAfter = res.headers["retry-after"];
-              const waitSec = retryAfter ? parseInt(retryAfter, 10) : Math.pow(2, MAX_RETRIES - retries + 1);
+              // A secondary limit without Retry-After asks for "a few minutes";
+              // the 2/4/8 s backoff never outlasts it and the run dies.
+              const secondary = /secondary rate limit/i.test(body);
+              const waitSec = retryAfter ? parseInt(retryAfter, 10) : secondary ? 60 : Math.pow(2, MAX_RETRIES - retries + 1);
               console.warn(`Rate limited (${res.statusCode}). Retrying in ${waitSec}s... (${retries} retries left)`);
               await sleep(waitSec * 1000);
               resolve(request(url, retries - 1));
@@ -71,6 +85,7 @@ async function graphql(query, variables, retries = MAX_RETRIES) {
       "Content-Length": Buffer.byteLength(payload),
     };
     if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
+    stats.graphql++;
 
     const req = https.request(
       "https://api.github.com/graphql",
@@ -261,6 +276,82 @@ function mapReviewComment(item) {
   };
 }
 
+// Plain GET of a public JSON document (the deployed prs.json). Deliberately
+// not request(): that attaches the GitHub token, which must not leave
+// api.github.com.
+function fetchPublicJson(url) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, { headers: { "User-Agent": "PersonalDashboard/1.0" } }, (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => {
+          if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode}`));
+          try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+        });
+      })
+      .on("error", reject);
+  });
+}
+
+// The previous run's output is the cache. A snapshot for another user or
+// another org set is somebody else's dashboard and is discarded.
+function priorUsable(prior, user, orgs) {
+  if (!prior || typeof prior !== "object") return false;
+  if (prior.github_user !== user) return false;
+  const a = [...(prior.orgs || [])].sort().join(","), b = [...(orgs || [])].sort().join(",");
+  return a === b;
+}
+
+function priorIndex(prior) {
+  const byUrl = new Map();
+  if (!prior) return byUrl;
+  for (const list of [prior.reviewing, prior.open_prs, prior.issues, prior.mentions]) {
+    for (const item of list || []) if (item && item.url) byUrl.set(item.url, item);
+  }
+  return byUrl;
+}
+
+async function loadPrior() {
+  const localPath = path.join(__dirname, "..", "data", "prs.json");
+  try {
+    if (fs.existsSync(localPath)) {
+      console.log(`Prior snapshot: ${localPath}`);
+      return JSON.parse(fs.readFileSync(localPath, "utf8"));
+    }
+    if (PRIOR_DATA_URL) {
+      console.log(`Prior snapshot: ${PRIOR_DATA_URL}`);
+      return await fetchPublicJson(PRIOR_DATA_URL);
+    }
+  } catch (e) {
+    console.warn(`  No usable prior snapshot (${e.message}); fetching everything.`);
+  }
+  return null;
+}
+
+// Comments, reviews, review comments and commits all bump the search result's
+// updated_at, so an item whose updated_at is unchanged since the prior run can
+// keep the activity fetched then. The reuse is bounded by MAX_ACTIVITY_AGE_MS
+// so a missed bump cannot pin stale activity indefinitely. Returns the cached
+// fields or null.
+function reuseActivity(prior, item, now = Date.now()) {
+  if (!prior || !item || !prior.updated || prior.updated !== item.updated) return null;
+  if (!Array.isArray(prior.activity) || !prior.activity_fetched_at) return null;
+  if (now - new Date(prior.activity_fetched_at).getTime() > MAX_ACTIVITY_AGE_MS) return null;
+  return prior;
+}
+
+// CI finishes without touching updated_at, so check-runs are keyed on what the
+// GraphQL rollup already reports: same head, same settled verdict, same jobs.
+// A rerun flips the rollup through PENDING, which misses and re-fetches.
+const SETTLED_ROLLUPS = new Set(["SUCCESS", "FAILURE", "ERROR"]);
+function reuseCI(prior, item) {
+  if (!prior || !item || !item.head_oid || prior.head_oid !== item.head_oid) return null;
+  if (!SETTLED_ROLLUPS.has(item.ci_rollup) || prior.ci_rollup !== item.ci_rollup) return null;
+  if (!Array.isArray(prior.ci_jobs)) return null;
+  return prior.ci_jobs;
+}
+
 async function fetchCIStatus(base, sha) {
   if (!sha) return { ci_jobs: [] };
   try {
@@ -295,9 +386,10 @@ async function fetchCIStatus(base, sha) {
   }
 }
 
-async function fetchActivity(pr) {
+async function fetchActivity(pr, cachedCI = null) {
   const [org, repo] = pr.url.replace("https://github.com/", "").split("/");
   const base = `https://api.github.com/repos/${org}/${repo}`;
+  const activity_fetched_at = new Date().toISOString();
 
   let commits = [], reviews = [], comments = [], reviewComments = [];
 
@@ -327,7 +419,7 @@ async function fetchActivity(pr) {
 
   // CI status from head commit
   const headSha = commits.length > 0 ? commits[commits.length - 1].sha : "";
-  const ci = await fetchCIStatus(base, headSha);
+  const ci = cachedCI ? { ci_jobs: cachedCI } : await fetchCIStatus(base, headSha);
 
   const activity = [
     ...commits.map(mapCommit),
@@ -336,7 +428,7 @@ async function fetchActivity(pr) {
     ...reviewComments.map(mapReviewComment),
   ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-  return { last_push, activity, ...ci, ...botVerdict(comments, headSha, last_push) };
+  return { last_push, activity, activity_fetched_at, ...ci, ...botVerdict(comments, headSha, last_push) };
 }
 
 // The repository's review bot posts one "Review state" comment per PR, marked
@@ -381,17 +473,31 @@ async function fetchIssueActivity(issue) {
   // Falls back to issue creation (handled downstream) when you've never replied.
   const myEvents = activity.filter(a => a.author === GITHUB_USER);
   const my_last_interaction = myEvents.length > 0 ? myEvents[0].created_at : "";
-  return { activity, my_last_interaction, last_push: my_last_interaction, comments };
+  return { activity, activity_fetched_at: new Date().toISOString(), my_last_interaction, last_push: my_last_interaction, comments };
 }
 
-async function enrichIssuesWithActivity(issues, label) {
+// Cached fields carried over for an issue or mention whose updated_at has not
+// moved. Only a mention carries unread_anchor; an item that moved between the
+// two tabs must not keep the other tab's anchor.
+function cachedIssueFields(prior, withAnchor) {
+  const { activity, activity_fetched_at, my_last_interaction, last_push, unread_anchor } = prior;
+  return withAnchor
+    ? { activity, activity_fetched_at, my_last_interaction, last_push, unread_anchor }
+    : { activity, activity_fetched_at, my_last_interaction, last_push };
+}
+
+async function enrichIssuesWithActivity(issues, label, priorByUrl = new Map()) {
   if (issues.length === 0) return issues;
   console.log(`\n  Fetching comments for ${issues.length} ${label}...`);
   const enriched = [];
+  let reused = 0;
   for (const issue of issues) {
-    const { activity, my_last_interaction, last_push } = await fetchIssueActivity(issue);
-    enriched.push({ ...issue, activity, my_last_interaction, last_push });
+    const prior = reuseActivity(priorByUrl.get(issue.url), issue);
+    if (prior) { reused++; enriched.push({ ...issue, ...cachedIssueFields(prior, false) }); continue; }
+    const { activity, activity_fetched_at, my_last_interaction, last_push } = await fetchIssueActivity(issue);
+    enriched.push({ ...issue, activity, activity_fetched_at, my_last_interaction, last_push });
   }
+  if (reused) console.log(`  ${reused} of ${issues.length} unchanged since the prior run; comments reused.`);
   return enriched;
 }
 
@@ -427,17 +533,21 @@ function mentionAnchor(activity, user, created) {
   return created || "";
 }
 
-async function enrichMentionsWithActivity(mentions) {
+async function enrichMentionsWithActivity(mentions, priorByUrl = new Map()) {
   if (mentions.length === 0) return mentions;
   console.log(`\n  Fetching comments for ${mentions.length} mentions...`);
   const enriched = [];
+  let reused = 0;
   for (const m of mentions) {
-    const { activity, my_last_interaction, comments } = await fetchIssueActivity(m);
+    const prior = reuseActivity(priorByUrl.get(m.url), m);
+    if (prior && prior.unread_anchor !== undefined) { reused++; enriched.push({ ...m, ...cachedIssueFields(prior, true) }); continue; }
+    const { activity, activity_fetched_at, my_last_interaction, comments } = await fetchIssueActivity(m);
     // Scan full bodies: the activity feed keeps only a 200-char preview.
     const full = comments.map(c => ({ author: (c.user || {}).login || "ghost", body: c.body || "", created_at: c.created_at }));
     const unread_anchor = mentionAnchor(full, GITHUB_USER, m.created);
-    enriched.push({ ...m, activity, my_last_interaction, last_push: unread_anchor, unread_anchor });
+    enriched.push({ ...m, activity, activity_fetched_at, my_last_interaction, last_push: unread_anchor, unread_anchor });
   }
+  if (reused) console.log(`  ${reused} of ${mentions.length} unchanged since the prior run; comments reused.`);
   return enriched;
 }
 
@@ -716,16 +826,34 @@ async function enrichWithSignals(prs, label, fragment = PR_SIGNALS_FRAGMENT) {
   return enriched;
 }
 
-async function enrichWithActivity(prs, label) {
+// Runs after enrichWithSignals: head_oid and ci_rollup on each PR are the CI
+// cache key. Activity is reused when updated_at is unchanged; check-runs when
+// the head and its settled rollup are unchanged.
+async function enrichWithActivity(prs, label, priorByUrl = new Map()) {
   if (prs.length === 0) return prs;
   console.log(`\n  Fetching activity for ${prs.length} ${label} PRs...`);
   const enriched = [];
+  let reusedActivity = 0, reusedCI = 0;
   for (const pr of prs) {
-    const { last_push, activity, ci_jobs, bot_verdict } = await fetchActivity(pr);
+    const prior = priorByUrl.get(pr.url);
+    const cachedCI = reuseCI(prior, pr);
+    if (cachedCI) reusedCI++;
+    const cached = reuseActivity(prior, pr);
+    let fetched;
+    if (cached) {
+      reusedActivity++;
+      const { last_push, activity, activity_fetched_at, bot_verdict } = cached;
+      fetched = { last_push, activity, activity_fetched_at, bot_verdict: bot_verdict || "", ci_jobs: cachedCI || (await fetchCIStatus(apiBase(pr), pr.head_oid)).ci_jobs };
+    } else {
+      fetched = await fetchActivity(pr, cachedCI);
+    }
     // Find the most recent activity event by the dashboard user (reviews, comments, review-comments)
-    const myEvents = activity.filter(a => a.author === GITHUB_USER && a.type !== "commit");
+    const myEvents = fetched.activity.filter(a => a.author === GITHUB_USER && a.type !== "commit");
     const my_last_interaction = myEvents.length > 0 ? myEvents[0].created_at : "";
-    enriched.push({ ...pr, last_push, activity, ci_jobs, bot_verdict, my_last_interaction });
+    enriched.push({ ...pr, ...fetched, my_last_interaction });
+  }
+  if (reusedActivity || reusedCI) {
+    console.log(`  Reused from the prior run: activity for ${reusedActivity}, check-runs for ${reusedCI} of ${prs.length}.`);
   }
   return enriched;
 }
@@ -929,6 +1057,11 @@ async function fetchMergerData() {
   return { entries: MERGE_ACCESS, total_open: allOpen.length, incomplete, repos, counts, sections, committers_source: [...committerSources].join(" + "), merged: mergedTotals };
 }
 
+function apiBase(pr) {
+  const [org, repo] = pr.url.replace("https://github.com/", "").split("/");
+  return `https://api.github.com/repos/${org}/${repo}`;
+}
+
 async function main() {
   if (ORGS.length === 0) {
     console.error("No orgs configured. Set \"orgs\" in config.json (e.g. [\"my-org\"]).");
@@ -936,6 +1069,12 @@ async function main() {
   }
 
   console.log(`Fetching data for ${ORGS.length} org(s): ${ORGS.join(", ")}`);
+
+  const priorRaw = await loadPrior();
+  const prior = priorUsable(priorRaw, GITHUB_USER, ORGS) ? priorRaw : null;
+  if (priorRaw && !prior) console.warn("  Prior snapshot is for another user or org set; ignoring it.");
+  const priorByUrl = priorIndex(prior);
+  if (prior) console.log(`  Prior snapshot from ${prior.updated}: ${priorByUrl.size} cached items.`);
 
   const results = await Promise.all(ORGS.map(fetchForOrg));
 
@@ -969,14 +1108,16 @@ async function main() {
   const reviewedBy = allReviewedByItems.map(mapPR);
   const mentionsAll = allMentionItems.map(mapMention);
 
-  // Enrich open PRs with activity (commits, reviews, comments)
-  let reviewingEnriched = await enrichWithActivity(reviewing, "reviewing");
-  let openPrsEnriched = await enrichWithActivity(openPrs, "your-open");
-
   // Enrich every in-flight list with GraphQL triage signals (per-reviewer
   // verdicts against the head commit, who owes a look, thread turns, CI rollup).
-  reviewingEnriched = await enrichWithSignals(reviewingEnriched, "reviewing");
-  openPrsEnriched = await enrichWithSignals(openPrsEnriched, "your-open");
+  // These change without bumping updated_at, so they are never cached.
+  let reviewingEnriched = await enrichWithSignals(reviewing, "reviewing");
+  let openPrsEnriched = await enrichWithSignals(openPrs, "your-open");
+
+  // Then activity (commits, reviews, comments) and check-runs, reusing the
+  // prior run's copy where the signals say nothing moved.
+  reviewingEnriched = await enrichWithActivity(reviewingEnriched, "reviewing", priorByUrl);
+  openPrsEnriched = await enrichWithActivity(openPrsEnriched, "your-open", priorByUrl);
 
   const assignedSet = new Set(allAssignedIssueItems.map((i) => i.html_url));
   const authoredSet = new Set(allAuthoredIssueItems.map((i) => i.html_url));
@@ -996,12 +1137,13 @@ async function main() {
     });
 
   // Enrich issues with comment activity (PR-style unread/inline threads).
-  const issuesEnriched = await enrichIssuesWithActivity(issues, "issues");
+  const issuesEnriched = await enrichIssuesWithActivity(issues, "issues", priorByUrl);
 
   // Mentions: drop what the other tabs already show, then fetch comments so
   // unread can start at the mention (or at your reply to it).
   const mentions = await enrichMentionsWithActivity(
-    dedupeMentions(mentionsAll, reviewingEnriched, openPrsEnriched, issuesEnriched)
+    dedupeMentions(mentionsAll, reviewingEnriched, openPrsEnriched, issuesEnriched),
+    priorByUrl
   );
   console.log(`  Mentions: ${mentionsAll.length} found, ${mentions.length} not already on another tab.`);
 
@@ -1036,11 +1178,12 @@ async function main() {
   console.log(
     `\nDone. ${data.counts.reviewing} reviewing, ${data.counts.open} open, ${data.counts.closed} closed, ${data.counts.reviewed_by} reviewed, ${data.counts.mentions} mentions, ${data.counts.issues} issues. Written to data/prs.json`
   );
+  console.log(`Requests: ${stats.rest} REST, ${stats.graphql} GraphQL.`);
 }
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { fetchMergerData, monthWindows, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep };
+  module.exports = { fetchMergerData, monthWindows, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep, priorUsable, priorIndex, reuseActivity, reuseCI, MAX_ACTIVITY_AGE_MS };
 }
 
 if (require.main === module) {
