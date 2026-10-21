@@ -7,10 +7,10 @@ A GitHub Pages dashboard for tracking your pull requests and issues across one o
 ## Features
 
 - **To Review** — open PRs requesting your review, with stale badges (> 7 days)
-- **Reviewing** — PRs you've reviewed that are still open
-- **Authored** — your open PRs
-- **Mentions** — issues/PRs where you're @mentioned
-- **Issues** — issues assigned to you or opened by you
+- **To Follow Up** — PRs you've reviewed that are still open
+- **To Unblock** — your open PRs
+- **Unread Mentions** — issues/PRs where you're @mentioned and not already on another tab
+- **Unread Issues** — issues assigned to you or opened by you
 - **Reviewed** — PRs you've reviewed (closed/merged)
 - **Done** — your closed/merged PRs
 
