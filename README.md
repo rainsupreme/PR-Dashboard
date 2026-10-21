@@ -6,12 +6,13 @@ A GitHub Pages dashboard for tracking your pull requests and issues across one o
 
 ## Features
 
-- **Needs Your Review** — open PRs requesting your review, with stale badges (> 7 days)
-- **Working On** — your open PRs
+- **To Review** — open PRs requesting your review, with stale badges (> 7 days)
+- **Reviewing** — PRs you've reviewed that are still open
+- **Authored** — your open PRs
 - **Mentions** — issues/PRs where you're @mentioned
 - **Issues** — issues assigned to you or opened by you
 - **Reviewed** — PRs you've reviewed (closed/merged)
-- **Completed** — your closed/merged PRs
+- **Done** — your closed/merged PRs
 
 Each tab has:
 - Multi-select repo filter (checkbox-based)
@@ -20,14 +21,15 @@ Each tab has:
 
 Other features:
 - GitHub Primer color scheme (light/dark/system toggle)
+- Tab counts are colored by what the tab asks of you: yellow = act now, blue =
+  your reviewer hat, green = your author hat, purple = peripheral, grey = history
 - Mobile responsive
 - Auto-refreshes hourly via GitHub Actions
 - Zero dependencies — single HTML file + JSON data
 
 ## Triage
 
-Your in-flight PRs (**Needs Your Review**, **Reviewed (Open)** and **Working
-On**) are enriched via the GitHub GraphQL API, and every row carries one chip
+Your in-flight PRs (**To Review**, **Reviewing** and **Authored**) are enriched via the GitHub GraphQL API, and every row carries one chip
 that says *whose move it is*, relative to you:
 
 | Chip | Meaning |
@@ -73,14 +75,14 @@ These feed the **Triage (needs action)** sort, the default on the three tabs
 (chronological sorts remain as options). The ladder differs by tab because your
 relationship to the PR differs:
 
-- **Working On** (you are the author): queued-but-broken > CI failing >
+- **Authored** (you are the author): queued-but-broken > CI failing >
   changes requested > conflicts > threads awaiting you > find a reviewer > ready
   to land > cancelled CI > queued > waiting on a reviewer.
-- **Reviewed (Open)** (you reviewed): review requested of you > author replied
+- **Reviewing** (you reviewed): review requested of you > author replied
   in your thread > *author's move if broken* > re-review after a push > re-check
   a stale approval > re-look after a comment-only review > merge (or nudge) >
   waiting on others.
-- **Needs Your Review**: your review, unless the author has CI or conflicts to
+- **To Review**: your review, unless the author has CI or conflicts to
   fix first; a request older than 7 days is bumped.
 
 ## Merge labels and merge access
