@@ -57,6 +57,9 @@ function ciState(pr) {
   if (has("failure")) return "failure";
   if ((rollup === "FAILURE" || rollup === "ERROR") && !has("cancelled")) return "failure";
   if (has("cancelled")) return "cancelled";
+  // Workflows waiting for a maintainer to approve the run (first-time
+  // contributor). Not pending: nothing is running until someone clicks.
+  if (has("action_required")) return "action_required";
   if (has("pending") || rollup === "PENDING" || rollup === "EXPECTED") return "pending";
   if (jobs.length > 0 || rollup === "SUCCESS") return "success";
   return "";
@@ -110,7 +113,7 @@ function isBroken(pr) {
 //   actionable keep the row bright even with no new activity
 //
 // The ladder differs by tab because the user's relationship to the PR does:
-// on an authored PR the user is the author, on the review tabs a reviewer. The
+// on an authored PR the user is the author, on the reviewing tab a reviewer. The
 // opts.canMerge flag (or opts.mergeAccess, an org/repo list resolved per PR)
 // turns "ready to merge" from a nudge into the user's own move. Time is not an
 // input to ownership; it is shown beside the chip and left to the user to
@@ -124,30 +127,46 @@ function whoseMove(pr, opts) {
   const waiting = pr.waiting_on || [];
   const mv = (owner, action, score, actionable, who) => ({ owner, action, who: who || [], score, actionable });
 
-  if (type === "review") {
-    // Incoming request: the review is the last mile unless the author has
-    // something to fix first.
-    if (ci === "failure") return mv("them", "author fixing CI", 20, false, [pr.author]);
-    if (conflict) return mv("them", "author rebasing", 25, false, [pr.author]);
-    const score = 60 + (daysOld(pr.created) > 7 ? 25 : 0);
-    return mv("me", "review", score, true);
-  }
-
-  if (type === "reviewed-open") {
+  if (type === "reviewing") {
+    // Reviewer's ladder. First the states where my look would be wasted
+    // because the author has something to do first -- a first look and a
+    // re-look are the same here -- then what I owe, most specific first.
+    if (pr.draft) return mv("them", "draft", 2, false, [pr.author]);
     if (labeled && !isBroken(pr)) return mv("queued", "queued for merge", 5, false);
-    // An explicit request and a reply in my own thread are cheap and do not
-    // need green CI, so they outrank the author's blockers.
-    if (pr.my_review_requested) return mv("me", "review requested", 85, true);
+    // A reply in my own thread is cheap and does not need green CI, so it
+    // outranks the author's blockers.
     if ((pr.threads_awaiting_me || 0) > 0) return mv("me", `reply in ${pr.threads_awaiting_me} thread${pr.threads_awaiting_me > 1 ? "s" : ""}`, 70, true);
-    // A re-review of a head that is red or conflicting is likely wasted: the
-    // author will push again. Their move first.
-    if (isBroken(pr)) return mv("them", "author's move", 15, false, [pr.author]);
+    if (conflict) return mv("them", "author rebasing", 25, false, [pr.author]);
+    if (ci === "failure") return mv("them", "author fixing CI", 20, false, [pr.author]);
+    // A first-time contributor's CI waits for a maintainer to approve the
+    // run. Nothing moves until someone does; if I can, that is my move.
+    if (ci === "action_required") {
+      return mayMerge ? mv("me", "approve CI run", 50, true) : mv("committer", "CI awaits approval", 30, false);
+    }
+    // Someone else already asked for changes on this head: their round first.
+    if (pr.my_review !== "CHANGES_REQUESTED" && (pr.changes_requested || 0) > 0) return mv("them", "addressing another review", 18, false, [pr.author]);
+    // Bot feedback the author has not touched (no reply, reaction, resolve or
+    // push since) says the PR is not ready for a human yet.
+    if ((pr.threads_bot || 0) > 0) return mv("them", `address ${pr.threads_bot} bot thread${pr.threads_bot > 1 ? "s" : ""}`, 16, false, [pr.author]);
+    if (pr.bot_verdict === "not-ready") return mv("them", "review bot: not ready", 14, false, [pr.author]);
+
+    // Clear of the author's blockers: what do I owe?
+    const age = daysOld(pr.created) > 7 ? 25 : 0;
+    if (pr.my_review_requested) {
+      // Re-requested after I reviewed = the author says it is ready for me
+      // again. A first request is the plain review.
+      if (pr.my_review || pr.my_last_look) return mv("me", "re-review requested", 85, true);
+      return mv("me", "review", 60 + age, true);
+    }
     if (pr.my_review === "CHANGES_REQUESTED" && pr.my_review_stale) return mv("me", "re-review: author pushed", 85, true);
     if (pr.my_review === "APPROVED" && pr.my_review_stale) return mv("me", "re-check: approved an older head", 65, true);
     if (!pr.my_review && pr.my_last_look === "stale") return mv("me", "re-look: author pushed since your comments", 62, true);
+    if (!pr.my_review && !pr.my_last_look) return mv("me", "review", 60 + age, true);
+    // A nudge is cheaper than a review, so it sits just under a first look.
     if (isClearToLand(pr) && !labeled) {
-      return mayMerge ? mv("me", "merge", 80, true) : mv("committer", "nudge a committer", 60, true);
+      return mayMerge ? mv("me", "merge", 80, true) : mv("committer", "nudge a committer", 58, true);
     }
+    if (pr.my_review === "CHANGES_REQUESTED") return mv("them", "author's move", 15, false, [pr.author]);
     if (ci === "cancelled") return mv("them", "CI cancelled, needs rerun", 12, false, [pr.author]);
     if (waiting.length > 0) return mv("them", "waiting on", 10, false, waiting);
     if (!pr.my_review && pr.my_last_look === "current") return mv("them", "awaiting author's reply", 10, false, [pr.author]);

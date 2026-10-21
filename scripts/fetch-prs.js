@@ -275,7 +275,10 @@ async function fetchCIStatus(base, sha) {
         // rerun, not a fix. Kept distinct so it is not reported as either.
         ci_jobs.push({ name: run.name, status: "cancelled", url: run.html_url || "" });
       } else if (run.conclusion === "action_required") {
-        ci_jobs.push({ name: run.name, status: "pending", url: run.html_url || "" });
+        // A first-time contributor's workflows do not run until a maintainer
+        // approves them. Nothing happens until someone clicks, so this is
+        // kept apart from a lane that is merely still running.
+        ci_jobs.push({ name: run.name, status: "action_required", url: run.html_url || "" });
       }
       // skip: skipped, neutral, stale
     }
@@ -327,7 +330,33 @@ async function fetchActivity(pr) {
     ...reviewComments.map(mapReviewComment),
   ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-  return { last_push, activity, ...ci };
+  return { last_push, activity, ...ci, ...botVerdict(comments, headSha, last_push) };
+}
+
+// The repository's review bot posts one "Review state" comment per PR, marked
+// `<!-- valkey-reviewer:state -->`, with a bold verdict ("Ready for human
+// review." / "Not ready for human review yet.") and usually the head it
+// judged. It edits that comment in place as the PR moves.
+//
+// Only the negative half carries information: nearly every PR is "ready", so
+// the positive verdict is a lamp that is always lit and is not surfaced. "Not
+// ready" demotes the PR on the review tab. The comment is a soft contract with
+// someone else's bot, so this fails open: no marker, an unparseable body, a
+// verdict about an older head (named sha not a prefix of the current one), or
+// a comment last touched before the latest push all yield "" (no signal).
+const BOT_STATE_MARKER = "<!-- valkey-reviewer:state -->";
+function botVerdict(comments, headSha, lastPush) {
+  const none = { bot_verdict: "" };
+  const state = (comments || []).filter((c) => (c.body || "").includes(BOT_STATE_MARKER)).pop();
+  if (!state) return none;
+  const m = /\*\*\s*(Ready|Not ready)\b[^*]*\*\*/i.exec(state.body);
+  if (!m) return none;
+  const touched = state.updated_at || state.created_at || "";
+  if (lastPush && touched && new Date(touched) < new Date(lastPush)) return none;
+  const paragraph = m.input.slice(m.index).split(/\n\s*\n/)[0];
+  const named = /\b[0-9a-f]{7,40}\b/i.exec(paragraph);
+  if (named && headSha && !headSha.toLowerCase().startsWith(named[0].toLowerCase())) return none;
+  return { bot_verdict: /^not/i.test(m[1]) ? "not-ready" : "ready" };
 }
 
 // Issues have only comments (no commits/reviews/CI). Fetch them, build a
@@ -362,6 +391,17 @@ async function enrichIssuesWithActivity(issues, label) {
 
 // A mention that is already on another tab carries a better signal there
 // (whose move, CI, threads), so it is dropped from the Mentions list.
+// Union of the review-requested and reviewed-by searches, by URL, requested
+// first so a PR in both keeps the richer (more recently updated) search hit.
+function mergeReviewing(requested, reviewed) {
+  const seen = new Set();
+  return [...requested, ...reviewed].filter((pr) => {
+    if (seen.has(pr.url)) return false;
+    seen.add(pr.url);
+    return true;
+  });
+}
+
 function dedupeMentions(mentions, ...otherLists) {
   const seen = new Set(otherLists.flat().map(i => i.url));
   return mentions.filter(m => !seen.has(m.url));
@@ -489,15 +529,25 @@ function mapSignals(prNode, me) {
   // Unresolved threads, split by whose reply is pending. On my own PR every
   // thread is mine to answer; on someone else's PR only threads I opened are
   // my conversations. A thread whose last word is a bot's is counted apart:
-  // worth a look, but not a human waiting on anyone. On my own PR, a reviewer
-  // whose thread I answered last owes the next reply, so they join waiting_on.
+  // it is feedback the author has not acknowledged. A push after the bot
+  // spoke, or a reaction on its comment, counts as acknowledgement -- Valkey
+  // contributors rarely click Resolve -- so those threads are not counted.
+  // On my own PR, a reviewer whose thread I answered last owes the next
+  // reply, so they join waiting_on.
+  const headDate = prNode.commits?.nodes?.[0]?.commit?.committedDate || "";
   let unresolved = 0, awaitingMe = 0, awaitingThem = 0, bot = 0;
   for (const t of prNode.reviewThreads?.nodes || []) {
     if (!t || t.isResolved !== false) continue;
     unresolved++;
     const first = t.opener?.nodes?.[0] || null;
     const last = t.latest?.nodes?.[0] || first;
-    if (isBotActor(last)) { bot++; continue; }
+    if (isBotActor(last)) {
+      const acknowledged =
+        (last.reactions?.totalCount || 0) > 0 ||
+        (!!headDate && !!last.createdAt && new Date(last.createdAt) < new Date(headDate));
+      if (!acknowledged) bot++;
+      continue;
+    }
     const lastLogin = (last?.author?.login || "").toLowerCase();
     const firstLogin = (first?.author?.login || "").toLowerCase();
     if (!meLower) continue;
@@ -560,10 +610,10 @@ query($owner: String!, $name: String!, $number: Int!) {
         nodes {
           isResolved
           opener: comments(first: 1) { nodes { author { login __typename } } }
-          latest: comments(last: 1) { nodes { author { login __typename } } }
+          latest: comments(last: 1) { nodes { author { login __typename } createdAt reactions { totalCount } } }
         }
       }
-      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
     }
   }
 }`;
@@ -634,23 +684,24 @@ async function main() {
     allAuthoredIssueItems.push(...result.authoredIssueItems);
   }
 
-  const toReview = allReviewItems.map(mapPR);
+  // One reviewing list: PRs that asked for my review and PRs I have already
+  // reviewed are the same job seen at different stages, so they share a tab
+  // and whoseMove() says which stage each is at. A PR can be in both searches
+  // (re-requested after a review); the URL dedupes it.
+  const reviewing = mergeReviewing(allReviewItems.map(mapPR), allReviewedOpenItems.map(mapPR));
   const openPrs = allOpenItems.map(mapPR);
   const closedPrs = allClosedItems.map(mapPR);
-  const reviewedOpen = allReviewedOpenItems.map(mapPR);
   const reviewedBy = allReviewedByItems.map(mapPR);
   const mentionsAll = allMentionItems.map(mapMention);
 
   // Enrich open PRs with activity (commits, reviews, comments)
-  let toReviewEnriched = await enrichWithActivity(toReview, "to-review");
+  let reviewingEnriched = await enrichWithActivity(reviewing, "reviewing");
   let openPrsEnriched = await enrichWithActivity(openPrs, "your-open");
-  let reviewedOpenEnriched = await enrichWithActivity(reviewedOpen, "reviewed-open");
 
   // Enrich every in-flight list with GraphQL triage signals (per-reviewer
   // verdicts against the head commit, who owes a look, thread turns, CI rollup).
-  toReviewEnriched = await enrichWithSignals(toReviewEnriched, "to-review");
+  reviewingEnriched = await enrichWithSignals(reviewingEnriched, "reviewing");
   openPrsEnriched = await enrichWithSignals(openPrsEnriched, "your-open");
-  reviewedOpenEnriched = await enrichWithSignals(reviewedOpenEnriched, "reviewed-open");
 
   const assignedSet = new Set(allAssignedIssueItems.map((i) => i.html_url));
   const authoredSet = new Set(allAuthoredIssueItems.map((i) => i.html_url));
@@ -675,7 +726,7 @@ async function main() {
   // Mentions: drop what the other tabs already show, then fetch comments so
   // unread can start at the mention (or at your reply to it).
   const mentions = await enrichMentionsWithActivity(
-    dedupeMentions(mentionsAll, toReviewEnriched, openPrsEnriched, reviewedOpenEnriched, issuesEnriched)
+    dedupeMentions(mentionsAll, reviewingEnriched, openPrsEnriched, issuesEnriched)
   );
   console.log(`  Mentions: ${mentionsAll.length} found, ${mentions.length} not already on another tab.`);
 
@@ -683,18 +734,16 @@ async function main() {
     github_user: GITHUB_USER,
     orgs: ORGS,
     updated: new Date().toISOString(),
-    to_review: toReviewEnriched,
+    reviewing: reviewingEnriched,
     open_prs: openPrsEnriched,
     closed_prs: closedPrs,
-    reviewed_open: reviewedOpenEnriched,
     reviewed_by: reviewedBy,
     mentions,
     issues: issuesEnriched,
     counts: {
-      to_review: toReviewEnriched.length,
+      reviewing: reviewingEnriched.length,
       open: openPrsEnriched.length,
       closed: closedPrs.length,
-      reviewed_open: reviewedOpenEnriched.length,
       reviewed_by: reviewedBy.length,
       mentions: mentions.length,
       issues: issuesEnriched.length,
@@ -707,13 +756,13 @@ async function main() {
   fs.writeFileSync(outPath, JSON.stringify(data, null, 2));
 
   console.log(
-    `\nDone. ${data.counts.to_review} to review, ${data.counts.open} open, ${data.counts.closed} closed, ${data.counts.reviewed_by} reviewed, ${data.counts.mentions} mentions, ${data.counts.issues} issues. Written to data/prs.json`
+    `\nDone. ${data.counts.reviewing} reviewing, ${data.counts.open} open, ${data.counts.closed} closed, ${data.counts.reviewed_by} reviewed, ${data.counts.mentions} mentions, ${data.counts.issues} issues. Written to data/prs.json`
   );
 }
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep };
+  module.exports = { mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep };
 }
 
 if (require.main === module) {

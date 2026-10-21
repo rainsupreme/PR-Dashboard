@@ -82,9 +82,8 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .stat-value { font-family: 'Big Shoulders Display', 'Oswald', 'Arial Narrow', sans-serif-condensed, sans-serif; font-weight: 700; font-size: 60px; line-height: 1; letter-spacing: -0.01em; margin-bottom: -4px; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--color-fg-muted); }
 @media (min-width: 1300px) { .stat-card { flex-direction: row; align-items: flex-end; gap: 10px; min-height: 72px; } .stat-text { align-self: flex-start; } }
 @media (max-width: 400px) { .stat-card { padding: 8px 10px 4px; } .stat-value { font-size: 44px; } .stat-label { font-size: 12px; } }
-/* Dark board: the big count is what the tab wants from you (your move / unread), grey until it is above zero. A lit card means act; the total lives in the caption. Lit color says which hat: yellow = act now, blue = your reviewer hat, green = your author hat, purple = peripheral. Reviewed and Done are history and never light up. */
-.stat-card.lit.review .stat-value { color: var(--color-attention-fg); }
-.stat-card.lit.reviewed-open .stat-value { color: var(--color-accent-fg); }
+/* Dark board: the big count is what the tab wants from you (your move / unread), grey until it is above zero. A lit card means act; the total lives in the caption. Lit color says which hat: blue = your reviewer hat, green = your author hat, purple = peripheral. Reviewed and Done are history and never light up. */
+.stat-card.lit.reviewing .stat-value { color: var(--color-accent-fg); }
 .stat-card.lit.open .stat-value { color: var(--color-open-fg); }
 .stat-card.lit.mentions .stat-value { color: var(--color-done-fg); }
 .stat-card.lit.issues .stat-value { color: var(--color-done-fg); }
@@ -128,17 +127,16 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .badge-move-queued { background: var(--color-neutral-subtle); color: var(--color-fg-muted); font-weight: 500; }
 .badge-move-idle { background: var(--color-neutral-subtle); color: var(--color-fg-muted); font-weight: 500; }
 .pr-merge-label { border: 1px solid var(--color-border-default); font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; }
-.move-btn { background: none; border: 1px solid var(--color-border-default); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--color-fg-muted); cursor: pointer; margin-left: auto; flex-shrink: 0; }
-.move-btn:hover { border-color: var(--color-accent-emphasis); color: var(--color-accent-fg); }
 .ci-rail { flex-shrink: 0; align-self: center; display: flex; flex-flow: column wrap; justify-content: center; align-content: center; gap: 3px; height: 2.4em; max-width: 64px; overflow: hidden; margin-left: 4px; }
 .ci-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .ci-success { background: var(--color-success-fg); }
 .ci-failure { background: var(--color-danger-fg); }
 .ci-pending { background: var(--color-attention-fg); }
 .ci-cancelled { background: var(--color-neutral-muted); border: 1px solid var(--color-fg-muted); box-sizing: border-box; }
+.ci-action_required { background: var(--color-neutral-muted); border: 1px dashed var(--color-attention-fg); box-sizing: border-box; }
 .ci-neutral { background: var(--color-neutral-muted); }
 .pr-quiet { opacity: 0.55; }
-/* Row rail: the row's manual controls (Reviewed / Read / Pin) stacked on the right edge at every width, so they always have the same home. Icons only; the title attribute carries the words. */
+/* Row rail: the row's manual controls (Read / Pin) stacked on the right edge at every width, so they always have the same home. Icons only; the title attribute carries the words. */
 .row-rail { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; align-self: flex-start; }
 /* 3 x 18px + 2 x 2px = 58px: fits inside the 64px two-line row, so the rail never makes a row taller. */
 .rail-btn { background: none; border: 1px solid var(--color-border-default); border-radius: 5px; width: 26px; height: 18px; padding: 0; font-size: 11px; line-height: 16px; color: var(--color-fg-muted); cursor: pointer; font-family: inherit; }
@@ -214,7 +212,7 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
   <div class="header-row">
     <h1 id="dashboard-title">PR Dashboard</h1>
     <div class="header-actions">
-      <button class="theme-toggle" id="reset-overrides" title="Clear local moves">
+      <button class="theme-toggle" id="reset-marks" title="Clear local read marks and pins">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
       </button>
       <a id="github-link" href="#" target="_blank" rel="noopener" class="github-link" title="View on GitHub">
@@ -232,18 +230,11 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 </div>
 
 <div class="stats">
-  <div class="stat-card review active" data-tab="review">
-    <div class="stat-value" id="count-review">-</div>
+  <div class="stat-card reviewing active" data-tab="reviewing">
+    <div class="stat-value" id="count-reviewing">-</div>
     <div class="stat-text">
       <div class="stat-label">To Review</div>
-      <div class="stat-sub" id="sub-review"></div>
-    </div>
-  </div>
-  <div class="stat-card reviewed-open" data-tab="reviewed-open">
-    <div class="stat-value" id="count-reviewed-open">-</div>
-    <div class="stat-text">
-      <div class="stat-label">To Follow Up</div>
-      <div class="stat-sub" id="sub-reviewed-open"></div>
+      <div class="stat-sub" id="sub-reviewing"></div>
     </div>
   </div>
   <div class="stat-card open" data-tab="open">
@@ -283,46 +274,25 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
   </div>
 </div>
 
-<div id="tab-review" class="tab-content active">
+<div id="tab-reviewing" class="tab-content active">
   <div class="section-header">
-    <span class="section-title">PRs Awaiting Your Review</span>
-    <span class="section-count" id="section-count-review"></span>
+    <span class="section-title">PRs You Are Reviewing</span>
+    <span class="section-count" id="section-count-reviewing"></span>
   </div>
   <div class="filters">
     <details class="repo-filter">
       <summary>Filter by repo</summary>
-      <div class="repo-filter-body" id="repo-checkboxes-review"></div>
+      <div class="repo-filter-body" id="repo-checkboxes-reviewing"></div>
     </details>
     <span class="filter-label">Sort</span>
-    <select class="filter-select" id="filter-review-sort">
+    <select class="filter-select" id="filter-reviewing-sort">
       <option value="triage" selected>Triage (needs action)</option>
       <option value="updated">Recently updated</option>
       <option value="created">Newest</option>
       <option value="comments">Most comments</option>
     </select>
   </div>
-  <div class="pr-list" id="list-review"><div class="loading">Loading...</div></div>
-</div>
-
-<div id="tab-reviewed-open" class="tab-content">
-  <div class="section-header">
-    <span class="section-title">Reviewed (Awaiting Merge)</span>
-    <span class="section-count" id="section-count-reviewed-open"></span>
-  </div>
-  <div class="filters">
-    <details class="repo-filter">
-      <summary>Filter by repo</summary>
-      <div class="repo-filter-body" id="repo-checkboxes-reviewed-open"></div>
-    </details>
-    <span class="filter-label">Sort</span>
-    <select class="filter-select" id="filter-reviewed-open-sort">
-      <option value="triage" selected>Triage (needs action)</option>
-      <option value="updated">Recently updated</option>
-      <option value="created">Newest</option>
-      <option value="comments">Most comments</option>
-    </select>
-  </div>
-  <div class="pr-list" id="list-reviewed-open"></div>
+  <div class="pr-list" id="list-reviewing"><div class="loading">Loading...</div></div>
 </div>
 
 <div id="tab-open" class="tab-content">
