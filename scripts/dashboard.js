@@ -365,24 +365,30 @@ function renderIssue(item) {
 
 // sortPRs provided by scripts/utils.js
 
+// Idempotent: the first call builds the chips; later calls (after a data
+// refresh) only append repos not seen before, checked, so the user's
+// selection survives the refresh.
 function buildRepoCheckboxes(containerId, items, onChange) {
   const container = document.getElementById(containerId);
   const repos = [...new Set(items.map(i => i.repo))].sort();
+  const have = new Set(Array.from(container.querySelectorAll("input[value]")).map(c => c.value));
 
-  const selAll = document.createElement("label");
-  selAll.className = "repo-chip select-all";
-  const selCb = document.createElement("input");
-  selCb.type = "checkbox";
-  selCb.checked = true;
-  selCb.addEventListener("change", () => {
-    container.querySelectorAll("input").forEach(c => { c.checked = selCb.checked; });
-    onChange();
-  });
-  selAll.appendChild(selCb);
-  selAll.appendChild(document.createTextNode(" All"));
-  container.appendChild(selAll);
+  if (!container.querySelector(".select-all")) {
+    const selAll = document.createElement("label");
+    selAll.className = "repo-chip select-all";
+    const selCb = document.createElement("input");
+    selCb.type = "checkbox";
+    selCb.checked = true;
+    selCb.addEventListener("change", () => {
+      container.querySelectorAll("input").forEach(c => { c.checked = selCb.checked; });
+      onChange();
+    });
+    selAll.appendChild(selCb);
+    selAll.appendChild(document.createTextNode(" All"));
+    container.appendChild(selAll);
+  }
 
-  repos.forEach(repo => {
+  repos.filter(repo => !have.has(repo)).forEach(repo => {
     const label = document.createElement("label");
     label.className = "repo-chip";
     const cb = document.createElement("input");
@@ -403,14 +409,57 @@ function getSelectedRepos(containerId) {
 
 // formatDate provided by scripts/utils.js
 
+const EMPTY_DATA = { github_user: "", orgs: [], updated: "", reviewing: [], open_prs: [], closed_prs: [], reviewed_by: [], mentions: [], issues: [], counts: { reviewing: 0, open: 0, closed: 0, reviewed_by: 0, mentions: 0, issues: 0 } };
+
+// The query string defeats the Pages CDN's 10-minute cache; no-store defeats
+// the browser's. Pages is static, so this costs nothing against any API budget.
+function fetchData() {
+  return fetch(`data/prs.json?t=${Date.now()}`, { cache: "no-store" }).then(r => {
+    if (!r.ok) return EMPTY_DATA;
+    return r.json();
+  });
+}
+
+// The page polls data/prs.json while open. A new `updated` means a deploy
+// landed; past this age with none, the refresh pipeline (timer or workflow)
+// has stopped and the banner says so.
+const REFRESH_POLL_MS = 2 * 60 * 1000;
+const STALE_MS = 45 * 60 * 1000;
+let currentUpdated = "";
+let staleDismissedFor = "";
+
+// Header line and stale banner, re-run on every poll so an open tab ages
+// honestly even when no new data arrives. Dismissing the banner holds until
+// the next deploy, which is also when it would clear on its own.
+function updateFreshness(data) {
+  currentUpdated = data.updated || "";
+  const userLabel = data.github_user ? `@${data.github_user} • ` : "";
+  // Refreshes are minutes apart, so the time matters, not just the date.
+  const when = data.updated ? new Date(data.updated).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  const updatedLabel = data.updated ? `Updated ${when}` : "Run the workflow to populate data";
+  document.getElementById("subtitle").textContent = `${userLabel}${updatedLabel}`;
+
+  const banner = document.getElementById("stale-banner");
+  if (isStale(data.updated, STALE_MS) && staleDismissedFor !== data.updated) {
+    const age = staleAgeLabel(Date.now() - new Date(data.updated).getTime());
+    document.getElementById("stale-banner-text").textContent =
+      `⚠ Data is ${age} old (updated ${formatDate(data.updated)}) — the refresh workflow may have stopped.`;
+    banner.style.display = "";
+  } else {
+    banner.style.display = "none";
+  }
+}
+document.getElementById("stale-banner-close").addEventListener("click", () => {
+  staleDismissedFor = currentUpdated;
+  document.getElementById("stale-banner").style.display = "none";
+});
+
 Promise.all([
   fetch("config.json").then(r => { if (!r.ok) throw new Error("config.json not found"); return r.json(); }),
-  fetch("data/prs.json").then(r => {
-    if (!r.ok) return { github_user: "", orgs: [], updated: "", reviewing: [], open_prs: [], closed_prs: [], reviewed_by: [], mentions: [], issues: [], counts: { reviewing: 0, open: 0, closed: 0, reviewed_by: 0, mentions: 0, issues: 0 } };
-    return r.json();
-  })
+  fetchData(),
 ])
-  .then(([config, data]) => {
+  .then(([config, initialData]) => {
+    let data = initialData;
     const orgs = config.orgs || (config.org ? [config.org] : []);
     const orgBadges = orgs.map(o => `<span class="org-badge">${escapeHtml(o)}</span>`).join(" ");
     document.getElementById("dashboard-title").innerHTML = `${escapeHtml(config.title)} ${orgBadges}`;
@@ -421,40 +470,27 @@ Promise.all([
     DASHBOARD_USER = data.github_user || config.github_user || "";
     if (Array.isArray(config.merge_labels)) DASHBOARD_MERGE_LABELS = config.merge_labels;
     if (Array.isArray(config.merge_access)) DASHBOARD_MERGE_ACCESS = config.merge_access;
-    const userLabel = data.github_user ? `@${data.github_user} • ` : "";
-    const updatedLabel = data.updated ? `Updated ${formatDate(data.updated)}` : "Run the workflow to populate data";
-    document.getElementById("subtitle").textContent = `${userLabel}${updatedLabel}`;
+    updateFreshness(data);
 
-    // Stale-data banner: the page renders a pre-built data/prs.json, so if the
-    // refresh workflow stalls the site silently shows old data. Warn past 90 min.
-    const STALE_MS = 90 * 60 * 1000;
-    if (isStale(data.updated, STALE_MS)) {
-      const banner = document.getElementById("stale-banner");
-      const age = staleAgeLabel(Date.now() - new Date(data.updated).getTime());
-      document.getElementById("stale-banner-text").textContent =
-        `⚠ Data is ${age} old (updated ${formatDate(data.updated)}) — the refresh workflow may have stopped.`;
-      banner.style.display = "";
-      document.getElementById("stale-banner-close").addEventListener("click", () => {
-        banner.style.display = "none";
-      });
-    }
-
-    const reviewing = data.reviewing || [];
+    let reviewing = data.reviewing || [];
 
     // Prune read markers for PRs no longer in any open list
-    const allOpen = [...reviewing, ...data.open_prs, ...(data.issues || []), ...(data.mentions || [])];
-    const allOpenUrls = new Set(allOpen.map(pr => pr.url));
-    const staleMarkers = getReadMarkers();
-    const openByUrl = new Map(allOpen.map(pr => [pr.url, pr]));
-    Object.keys(staleMarkers).forEach(url => {
-      if (!allOpenUrls.has(url)) { delete staleMarkers[url]; return; }
-      // A pin clears itself once you have acted on the item since pinning it.
-      if (staleMarkers[url].pinned_at && !pinStillHolds(staleMarkers[url], openByUrl.get(url), DASHBOARD_USER)) {
-        delete staleMarkers[url].pinned_at;
-        if (!Object.keys(staleMarkers[url]).length) delete staleMarkers[url];
-      }
-    });
-    saveReadMarkers(staleMarkers);
+    function pruneMarkers() {
+      const allOpen = [...reviewing, ...data.open_prs, ...(data.issues || []), ...(data.mentions || [])];
+      const allOpenUrls = new Set(allOpen.map(pr => pr.url));
+      const staleMarkers = getReadMarkers();
+      const openByUrl = new Map(allOpen.map(pr => [pr.url, pr]));
+      Object.keys(staleMarkers).forEach(url => {
+        if (!allOpenUrls.has(url)) { delete staleMarkers[url]; return; }
+        // A pin clears itself once you have acted on the item since pinning it.
+        if (staleMarkers[url].pinned_at && !pinStillHolds(staleMarkers[url], openByUrl.get(url), DASHBOARD_USER)) {
+          delete staleMarkers[url].pinned_at;
+          if (!Object.keys(staleMarkers[url]).length) delete staleMarkers[url];
+        }
+      });
+      saveReadMarkers(staleMarkers);
+    }
+    pruneMarkers();
 
     // Dark board: each card's big number is what the tab wants from you, lit
     // only while it is above zero; the caption is the tab's total. The color
@@ -601,7 +637,8 @@ Promise.all([
     };
 
     // Merger row: only with merge_access, and only the sections the fetch published.
-    if (data.merger) {
+    const renderMerger = () => {
+      if (!data.merger) return;
       document.getElementById("stats-merger").hidden = false;
       const m = data.merger;
       const renderSection = (key, tab, empty) => {
@@ -621,7 +658,8 @@ Promise.all([
         ? mine.map(pr => renderPR(pr, "closed")).join("")
         : `<div class="loading">You have not merged anything here yet</div>`;
       document.getElementById("section-count-m-merged").textContent = `${mine.length} merged`;
-    }
+    };
+    renderMerger();
 
     buildRepoCheckboxes("repo-checkboxes-reviewing", reviewing, renderReviewing);
     buildRepoCheckboxes("repo-checkboxes-open", data.open_prs, renderOpen);
@@ -674,6 +712,49 @@ Promise.all([
     renderReviewing = withExpandBtn(origRenderReviewing);
     renderOpen = withExpandBtn(origRenderOpen);
     renderReviewing(); renderOpen();
+
+    // Swap in a newer prs.json without a reload: filters, repo chips, scroll
+    // and expanded activity sections survive; new repos get a chip.
+    function applyData(fresh) {
+      const open = new Set(Array.from(document.querySelectorAll(".activity-section.open")).map(s => s.id));
+      data = fresh;
+      reviewing = data.reviewing || [];
+      DASHBOARD_USER = data.github_user || DASHBOARD_USER;
+      pruneMarkers();
+      buildRepoCheckboxes("repo-checkboxes-reviewing", reviewing, renderReviewing);
+      buildRepoCheckboxes("repo-checkboxes-open", data.open_prs, renderOpen);
+      buildRepoCheckboxes("repo-checkboxes-mentions", data.mentions || [], renderMentions);
+      buildRepoCheckboxes("repo-checkboxes-issues", data.issues || [], renderIssues);
+      buildRepoCheckboxes("repo-checkboxes-reviewed", data.reviewed_by || [], renderReviewed);
+      buildRepoCheckboxes("repo-checkboxes-closed", data.closed_prs, renderClosed);
+      refreshAll(); renderReviewed(); renderClosed(); renderMerger();
+      open.forEach(id => {
+        const s = document.getElementById(id);
+        if (!s) return;
+        s.classList.add("open");
+        const t = document.querySelector(`.activity-toggle[data-target="${id}"]`);
+        if (t) t.textContent = "▾ activity";
+      });
+    }
+
+    let polling = false;
+    async function pollForUpdate() {
+      if (polling) return;
+      polling = true;
+      try {
+        const fresh = await fetchData();
+        if (fresh.updated && fresh.updated !== data.updated) applyData(fresh);
+      } catch (e) {
+        // Offline or Pages hiccup: keep what is on screen; the banner ages it.
+      } finally {
+        polling = false;
+        updateFreshness(data);
+      }
+    }
+    setInterval(pollForUpdate, REFRESH_POLL_MS);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") pollForUpdate();
+    });
 
     // Event delegation for activity toggles and mark-read buttons
     document.addEventListener("click", (e) => {
