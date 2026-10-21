@@ -1,0 +1,22 @@
+[Unit]
+Description=Dispatch the PR Dashboard refresh workflow (one workflow_dispatch POST)
+# System-unit variant for hosts without a per-user systemd manager (e.g. systemd 219
+# on Amazon Linux 2, where `systemctl --user` fails). Runs as the named user so gh
+# finds that user's login (~/.config/gh/hosts.yml, `workflow` scope required).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Set both to the account that is logged in to gh, and the repo to your fork.
+User=rainval
+Environment=HOME=/home/rainval
+Environment=PR_DASHBOARD_REPO=rainsupreme/PR-Dashboard
+WorkingDirectory=/home/rainval
+ExecStart=/bin/bash -c 'exec "$HOME/.local/bin/gh" workflow run update.yml -R "$PR_DASHBOARD_REPO"'
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pr-dashboard-refresh
+NoNewPrivileges=true
+PrivateTmp=true

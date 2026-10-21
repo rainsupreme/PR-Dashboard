@@ -223,7 +223,7 @@ data/prs.json        ← all PR/issue data + triage signals (refreshed at deploy
 index.html           ← single-page dashboard (fetches data/prs.json)
 scripts/utils.js     ← shared logic (sorting, triage scoring) — also unit-tested
 .github/workflows/   ← hourly cron (throttled by GitHub) + push + workflow_dispatch
-contrib/systemd/     ← timer + service that dispatch the workflow every 15 min
+contrib/systemd/     ← timer + service (user/ or system/ variant) dispatching the workflow every 15 min
 ```
 
 The GitHub Actions workflow:
@@ -239,17 +239,33 @@ No data is committed back to the repo — fresh data is fetched at each deploy.
 The workflow's hourly `schedule:` is the floor every checkout gets, but GitHub
 throttles scheduled runs on quiet repos: in practice it fires every 3-6 hours.
 `workflow_dispatch` is not throttled, so for a 15-minute cadence add a one-line
-systemd user timer that runs `gh workflow run update.yml -R <owner>/<repo>`.
+systemd timer that runs `gh workflow run update.yml -R <owner>/<repo>`.
 The schedule keeps running alongside it; an extra run is cheap. On an always-on
-machine where `gh` is logged in with the `workflow` scope:
+machine where `gh` is logged in with the `workflow` scope, pick the variant
+your host supports:
+
+**Per-user units** (a desktop with a user systemd manager):
 
 ```bash
-cp contrib/systemd/pr-dashboard-refresh.* ~/.config/systemd/user/
+cp contrib/systemd/user/pr-dashboard-refresh.* ~/.config/systemd/user/
 # edit PR_DASHBOARD_REPO in the .service if this is a fork
 systemctl --user daemon-reload
 systemctl --user enable --now pr-dashboard-refresh.timer
 systemctl --user list-timers pr-dashboard-refresh.timer   # next fire
 journalctl --user -u pr-dashboard-refresh.service -n 5    # last dispatches
+```
+
+**System units** (no per-user manager, e.g. systemd 219 on Amazon Linux 2,
+where `systemctl --user` fails with "Failed to get D-Bus connection"). The
+service runs as the named user, so `gh` finds that user's login:
+
+```bash
+# edit User=, HOME= and PR_DASHBOARD_REPO in the .service first
+sudo cp contrib/systemd/system/pr-dashboard-refresh.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pr-dashboard-refresh.timer
+systemctl list-timers pr-dashboard-refresh.timer          # next fire
+journalctl -u pr-dashboard-refresh.service -n 5           # last dispatches
 ```
 
 Each run costs a few API requests, not a few hundred: the fetcher downloads the
