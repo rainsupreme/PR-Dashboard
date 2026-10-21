@@ -94,3 +94,14 @@ describe("isRateLimited", () => {
     assert.equal(isRateLimited(200, {}, ""), false);
   });
 });
+
+describe("pruneTouchesCache", () => {
+  const { pruneTouchesCache } = require("../scripts/fetch-prs.js");
+  it("keeps boolean answers for live heads only", () => {
+    const out = pruneTouchesCache({ a: true, b: false, gone: true, bad: null, str: "yes" }, ["a", "b", "bad", "str", "new"]);
+    assert.deepEqual(out, { a: true, b: false });
+  });
+  it("tolerates a missing cache", () => {
+    assert.deepEqual(pruneTouchesCache(undefined, ["a"]), {});
+  });
+});

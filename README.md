@@ -165,7 +165,9 @@ same set over time). Rules live in `scripts/merger.js`; no model is involved.
 
 The Merged counter is incremental: the first run walks the merge history once,
 later runs fetch only merges since the last one. The cache (`data/merger-cache.json`)
-ships with the site and is read back from Pages on the next refresh.
+ships with the site and is read back from Pages on the next refresh. It also
+remembers, per head commit, whether a PR with runs awaiting approval touches
+`.github/`, so that check costs a request only for heads it has not seen.
 
 ## Merge labels and merge access
 
@@ -256,12 +258,16 @@ activity when its search `updated_at` has not moved, and its check-runs when
 the head commit and its settled CI rollup have not moved. GraphQL triage
 signals are always re-fetched, since merge state, thread turns and CI finish
 without touching `updated_at`. A quiet run of the personal lists is ~10 REST +
-~40 GraphQL requests against budgets of 1,000 and 5,000 per hour (the merger
-row adds its own batched GraphQL and a few REST calls per repo), so
+~2 GraphQL requests; with the merger row for nine repos the whole run measured
+47 REST + 20 GraphQL, against budgets of 1,000 and 5,000 per hour, so
 `GITHUB_TOKEN` suffices; set a
 `DASHBOARD_TOKEN` secret (a PAT, public read is enough) only if you want a
 cadence well under 10 minutes. Cached activity is re-fetched after 6 hours
-regardless, bounding anything that fails to bump `updated_at`.
+regardless, bounding anything that fails to bump `updated_at`. The tight
+budget is search: ~27 search calls per run against GitHub's 30 per minute, so
+a secondary-limit 403 there is waited out for 60 s instead of failing the run,
+while a permission 403 (the Actions token cannot list another repo's
+collaborators) fails at once and falls back.
 
 The page polls `data/prs.json` every 2 minutes while open (and when the tab
 becomes visible) and swaps new data in place; filters, pins, open activity

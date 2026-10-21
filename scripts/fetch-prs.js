@@ -912,12 +912,22 @@ async function fetchCommitters(repoFull) {
   }
 }
 
+// true / false, or null when the file list could not be read (not cached).
 async function touchesWorkflows(pr) {
   const { owner, name } = repoParts(pr);
   try {
     const { body } = await request(`https://api.github.com/repos/${owner}/${name}/pulls/${pr.number}/files?per_page=100`);
     return body.some((f) => (f.filename || "").startsWith(".github/"));
-  } catch (e) { return false; }
+  } catch (e) { return null; }
+}
+
+// A PR's file list changes only with its head, so the answer is cached by
+// head_oid in merger-cache.json. Entries for heads no longer waiting on a run
+// are dropped each run, so the map stays the size of the waiting set.
+function pruneTouchesCache(touches, liveHeads) {
+  const out = {};
+  for (const sha of liveHeads) if (touches && typeof touches[sha] === "boolean") out[sha] = touches[sha];
+  return out;
 }
 
 // All-time merged counter, incrementally maintained. The cache is the previous
@@ -943,7 +953,9 @@ async function searchMerged(q) {
   return out;
 }
 
-// Bump when the cached shape changes; an old cache is discarded and rebuilt.
+// Shape: { version, entries: { <org>: merged-counter state }, touches: { <head_oid>: bool } }.
+// Bump when the cached shape changes incompatibly; an old cache is discarded
+// and rebuilt (the merged-history scan is minutes, so additive keys do not bump).
 const MERGER_CACHE_VERSION = 2;
 
 async function loadMergerCache() {
@@ -1056,10 +1068,20 @@ async function fetchMergerData() {
   lap("signals fetched");
   const incomplete = enriched.filter((p) => p.signals_missing).length;
   enriched = enriched.filter((p) => !p.signals_missing);
+  const touches = cache.touches || {};
+  let touchesFetched = 0, touchesReused = 0;
   for (const pr of enriched) {
-    if (ciWaiting.has(pr.head_oid)) pr.touches_workflows = await touchesWorkflows(pr);
+    if (!ciWaiting.has(pr.head_oid)) continue;
+    if (typeof touches[pr.head_oid] === "boolean") { touchesReused++; }
+    else {
+      touchesFetched++;
+      const v = await touchesWorkflows(pr);
+      if (v !== null) touches[pr.head_oid] = v;
+    }
+    pr.touches_workflows = touches[pr.head_oid] || false;
   }
-  lap("workflow-touch checks done");
+  cache.touches = pruneTouchesCache(touches, enriched.map((p) => p.head_oid).filter((sha) => ciWaiting.has(sha)));
+  lap(`workflow-touch checks done (${touchesReused} cached, ${touchesFetched} fetched)`);
   const { sections, counts } = buildMergerSections(enriched, { committers, ciWaiting, mergeLabels: MERGE_LABELS, me: GITHUB_USER });
   const outDir = path.join(__dirname, "..", "data");
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
@@ -1195,7 +1217,7 @@ async function main() {
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { fetchMergerData, monthWindows, isRateLimited, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep, priorUsable, priorIndex, reuseActivity, reuseCI, MAX_ACTIVITY_AGE_MS };
+  module.exports = { fetchMergerData, monthWindows, isRateLimited, pruneTouchesCache, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep, priorUsable, priorIndex, reuseActivity, reuseCI, MAX_ACTIVITY_AGE_MS };
 }
 
 if (require.main === module) {
