@@ -139,8 +139,9 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .ci-neutral { background: var(--color-neutral-muted); }
 .pr-quiet { opacity: 0.55; }
 /* Row rail: the row's manual controls (Reviewed / Read / Pin) stacked on the right edge at every width, so they always have the same home. Icons only; the title attribute carries the words. */
-.row-rail { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; align-self: flex-start; }
-.rail-btn { background: none; border: 1px solid var(--color-border-default); border-radius: 6px; width: 28px; height: 20px; padding: 0; font-size: 11px; line-height: 18px; color: var(--color-fg-muted); cursor: pointer; font-family: inherit; }
+.row-rail { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; align-self: flex-start; }
+/* 3 x 18px + 2 x 2px = 58px: fits inside the 64px two-line row, so the rail never makes a row taller. */
+.rail-btn { background: none; border: 1px solid var(--color-border-default); border-radius: 5px; width: 26px; height: 18px; padding: 0; font-size: 11px; line-height: 16px; color: var(--color-fg-muted); cursor: pointer; font-family: inherit; }
 .rail-btn:hover { border-color: var(--color-accent-emphasis); color: var(--color-accent-fg); }
 .rail-btn.on { color: var(--color-attention-fg); border-color: var(--color-attention-fg); background: var(--color-attention-subtle); }
 /* Pinned: the user promised to act. Left bar + flag on the avatar, never dimmed. */
@@ -151,7 +152,7 @@ body { background: var(--color-canvas-default); font-family: -apple-system, Blin
 .pr-item.pinned .pin-flag { display: block; }
 /* Phone: avatar / number / title form a header row and the rest flows full-width beneath, so chips and meta get the whole width. The rail spans the row's right edge. */
 @media (max-width: 600px) {
-  .pr-item { display: grid; grid-template-columns: 40px auto 1fr 28px; grid-template-areas: "ava num title rail" "chips chips chips rail" "meta meta meta rail" "ci ci ci rail" "act act act rail"; column-gap: 10px; row-gap: 6px; align-items: center; }
+  .pr-item { display: grid; grid-template-columns: 40px auto 1fr 26px; grid-template-areas: "ava num title rail" "chips chips chips rail" "meta meta meta rail" "ci ci ci rail" "act act act rail"; column-gap: 10px; row-gap: 6px; align-items: center; }
   .pr-avatar { grid-area: ava; } .pr-number { grid-area: num; min-width: 0; } .row-rail { grid-area: rail; align-self: start; }
   .pr-content, .pr-title-row { display: contents; }
   .pr-title { grid-area: title; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3; }

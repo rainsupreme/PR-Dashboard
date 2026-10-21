@@ -37,7 +37,7 @@ requests you can act on now; **To Follow Up** counts PRs you reviewed that are
 **To Unblock** counts your own PRs that are waiting on you (CI, conflicts,
 requested changes, a reply, a reviewer to find, a merge); **Unread Mentions** and
 **Unread Issues** count unread activity. The tab's total sits in the caption
-(`15 PRs open`). A lit card means act; a row of grey numbers
+(`15 PRs open`, plus `· N pinned` when you have pinned rows). A lit card means act; a row of grey numbers
 means nothing is waiting on you. **Mentions** lists only items not already on
 another tab, and counts as new everything since the comment that mentioned you
 (or since your reply to it). **Reviewed** and **Done** are history and never light up.
