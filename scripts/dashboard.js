@@ -51,6 +51,37 @@ function escapeHtml(str) {
 // Earlier versions kept manual tab moves under this key; the reset button
 // still clears it so a stale entry cannot linger.
 const LEGACY_OVERRIDES_KEY = "dashboard-overrides";
+
+// GitHub profile URL for an author login. "ghost" is the placeholder for a
+// deleted account, which has no profile — leave it unlinked.
+function profileUrl(login) {
+  return login && login !== "ghost" ? `https://github.com/${encodeURIComponent(login)}` : "";
+}
+
+// Avatar linked to the author's profile. The <a> is display:contents so the
+// grid/flex layout sees the <img> directly (same trick as .pr-content).
+function avatarLink(item) {
+  const img = `<img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy">`;
+  const href = profileUrl(item.author);
+  return href
+    ? `<a class="pr-avatar-link" href="${escapeAttr(href)}" target="_blank" rel="noopener" title="@${escapeHtml(item.author)}">${img}</a>`
+    : img;
+}
+
+// PR/issue number linked to the item itself.
+function numberLink(item) {
+  return `<a class="pr-number-link" href="${escapeAttr(item.url)}" target="_blank" rel="noopener"><span class="pr-number">${item.number}</span></a>`;
+}
+
+// Author handle linked to their profile.
+function authorLink(login) {
+  const href = profileUrl(login);
+  const label = `@${escapeHtml(login)}`;
+  return href
+    ? `<a class="pr-author-link" href="${escapeAttr(href)}" target="_blank" rel="noopener">${label}</a>`
+    : label;
+}
+
 let DASHBOARD_USER = "";
 let DASHBOARD_MERGE_LABELS = ["to-be-merged"];
 // Orgs / repos where the dashboard user can merge (config.json merge_access).
@@ -209,7 +240,7 @@ function renderPR(pr, type) {
   const age = (type === "reviewing" && move && move.action === "review") ? daysOld(pr.created) : 0;
   const staleBadge = age > 7 ? `<span class="pr-badge badge-stale">${age}d waiting</span>` : "";
   const dateLabel = type === "closed" ? `closed ${timeAgo(pr.closed)}` : type === "merger" ? `opened ${timeAgo(pr.created)} · updated ${timeAgo(pr.updated)}` : `updated ${timeAgo(pr.updated)}`;
-  const authorLine = (type === "reviewing" || type === "merger") ? `<span>@${escapeHtml(pr.author)}</span>` : "";
+  const authorLine = (type === "reviewing" || type === "merger") ? `<span>${authorLink(pr.author)}</span>` : "";
 
   const { hasActivity, hasUnread, unreadBadge, activitySection, toggleBtn } = buildActivity(pr, type);
 
@@ -288,8 +319,8 @@ function renderPR(pr, type) {
   const rail = type !== "closed" ? rowRail(pr, hasActivity) : "";
 
   return `<div class="${itemClass}">
-    <img class="pr-avatar" src="${escapeAttr(pr.avatar)}" alt="" loading="lazy"><span class="pin-flag">⚑</span>
-    <span class="pr-number">${pr.number}</span>
+    ${avatarLink(pr)}<span class="pin-flag">⚑</span>
+    ${numberLink(pr)}
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(pr.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(pr.title)}</a>
@@ -320,8 +351,8 @@ function renderMention(item) {
   const itemClass = `pr-item${(hasActivity && !hasUnread && !pinned) ? " pr-quiet" : ""}${pinned ? " pinned" : ""}`;
 
   return `<div class="${itemClass}">
-    <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy"><span class="pin-flag">⚑</span>
-    <span class="pr-number">${item.number}</span>
+    ${avatarLink(item)}<span class="pin-flag">⚑</span>
+    ${numberLink(item)}
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
@@ -329,7 +360,7 @@ function renderMention(item) {
       </div>
       <div class="pr-meta">
         <span class="pr-repo">${escapeHtml(item.repo)}</span>
-        <span>@${escapeHtml(item.author)}</span>
+        <span>${authorLink(item.author)}</span>
         <span>updated ${timeAgo(item.updated)}</span>
         ${toggleBtn}
       </div>
@@ -344,8 +375,8 @@ function renderIssue(item) {
   const pinned = isPinnedUrl(item.url);
   const itemClass = `pr-item${(hasActivity && !hasUnread && !pinned) ? " pr-quiet" : ""}${pinned ? " pinned" : ""}`;
   return `<div class="${itemClass}">
-    <img class="pr-avatar" src="${escapeAttr(item.avatar)}" alt="" loading="lazy"><span class="pin-flag">⚑</span>
-    <span class="pr-number">${item.number}</span>
+    ${avatarLink(item)}<span class="pin-flag">⚑</span>
+    ${numberLink(item)}
     <div class="pr-content">
       <div class="pr-title-row">
         <a href="${escapeAttr(item.url)}" target="_blank" rel="noopener" class="pr-title">${escapeHtml(item.title)}</a>
@@ -353,7 +384,7 @@ function renderIssue(item) {
       </div>
       <div class="pr-meta">
         <span class="pr-repo">${escapeHtml(item.repo)}</span>
-        <span>@${escapeHtml(item.author)}</span>
+        <span>${authorLink(item.author)}</span>
         <span>updated ${timeAgo(item.updated)}</span>
         ${toggleBtn}
       </div>
@@ -502,7 +533,8 @@ Promise.all([
     // Dark board: each card's big number is what the tab wants from you, lit
     // only while it is above zero; the caption is the tab's total. The color
     // already says what kind of attention, so the caption carries no label. Reviewed and
-    // Done are history, so they show their totals, unlit, with no caption.
+    // Done are history, so they show their totals unlit, captioned with the span
+    // they cover and the throughput over it (see sinceWithRate).
     function setCard(tab, big, lit, caption) {
       const card = document.querySelector(`.stat-card[data-tab="${tab}"]`);
       document.getElementById(`count-${tab}`).textContent = big;
@@ -527,8 +559,8 @@ Promise.all([
       setCard("mentions", newMentions, newMentions > 0, caption(data.mentions, "open"));
       const newIssues = unreadCount(data.issues);
       setCard("issues", newIssues, newIssues > 0, caption(data.issues, "issues open"));
-      setCard("reviewed", data.counts.reviewed_by || 0, false, since((data.reviewed_by || []).map(p => p.closed)));
-      setCard("closed", data.counts.closed, false, since((data.closed_prs || []).map(p => p.created)));
+      setCard("reviewed", data.counts.reviewed_by || 0, false, sinceWithRate(data.counts.reviewed_by || 0, (data.reviewed_by || []).map(p => p.closed)));
+      setCard("closed", data.counts.closed, false, sinceWithRate(data.counts.closed, (data.closed_prs || []).map(p => p.created)));
       if (data.merger) {
         const m = data.merger;
         const sec = (k) => (m.sections && m.sections[k]) || [];
@@ -538,13 +570,28 @@ Promise.all([
         setCard("m-unstick", sec("unstick").length, sec("unstick").length > 0, "stuck after review");
         const broken = sec("queue").filter(p => p.merger_broken).length;
         setCard("m-queue", sec("queue").length, broken > 0, broken ? `${broken} broken` : "to-be-merged");
-        setCard("m-merged", (m.merged || {}).count || 0, false, since([(m.merged || {}).since]));
+        setCard("m-merged", (m.merged || {}).count || 0, false, sinceWithRate((m.merged || {}).count || 0, [(m.merged || {}).since]));
       }
     }
     // "since 2024-04": the month of the earliest date in the list.
     function since(dates) {
       const d = (dates || []).filter(Boolean).sort()[0];
       return d ? `since ${d.slice(0, 7)}` : "";
+    }
+    // A history caption: the span these totals cover ("since 2024-04") plus the
+    // throughput over it on a second line. The unit adapts day -> week -> month
+    // so the number stays in a friendly >=1.0 range instead of 0.0X per day.
+    function sinceWithRate(count, dates) {
+      const sinceLine = since(dates);
+      const first = (dates || []).filter(Boolean).sort()[0];
+      if (!sinceLine || !count || !first) return sinceLine;
+      const days = Math.max(1, (Date.now() - new Date(first)) / 86400000);
+      let rate = "";
+      for (const [unit, span] of [["day", 1], ["week", 7], ["month", 30]]) {
+        const r = count / (days / span);
+        if (r >= 1 || unit === "month") { rate = `${r.toFixed(1)} per ${unit}`; break; }
+      }
+      return `${sinceLine}\n${rate}`;
     }
     updateCards();
 
