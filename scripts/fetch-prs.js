@@ -440,6 +440,7 @@ const EMPTY_SIGNALS = Object.freeze({
   mergeable: "UNKNOWN",
   ci_rollup: "",
   head_oid: "",
+  head_pushed_at: "",
   unresolved_threads: 0,
   threads_awaiting_me: 0,
   threads_awaiting_them: 0,
@@ -478,6 +479,7 @@ function mapSignals(prNode, me) {
   const author = (prNode.author?.login || "").toLowerCase();
   const iAmAuthor = !!meLower && author === meLower;
   const head = prNode.headRefOid || "";
+  const headCommit = prNode.commits?.nodes?.[0]?.commit || {};
 
   // Latest non-COMMENTED review per non-bot, non-author reviewer, with the
   // commit it was given on. A verdict on an older head is "stale": the
@@ -502,9 +504,10 @@ function mapSignals(prNode, me) {
       latest.set(login.toLowerCase(), { login, state: r.state, oid: r.commit?.oid || "", at: r.submittedAt || "" });
     }
   }
-  const reviewers = [...latest.values()].map(({ login, state, oid }) => ({
+  const reviewers = [...latest.values()].map(({ login, state, oid, at }) => ({
     login,
     state,
+    at,
     stale: state !== "COMMENTED" && !!head && !!oid && oid !== head,
   }));
 
@@ -573,6 +576,7 @@ function mapSignals(prNode, me) {
     // statuses (e.g. DCO) that check-runs alone miss.
     ci_rollup: rollup,
     head_oid: head,
+    head_pushed_at: headCommit.committedDate || "",
     unresolved_threads: unresolved,
     threads_awaiting_me: awaitingMe,
     threads_awaiting_them: awaitingThem,
@@ -592,34 +596,47 @@ function mapSignals(prNode, me) {
   };
 }
 
+// Fields every in-flight PR needs for triage. Shared by the per-PR query
+// (fallback) and the aliased batch query below.
+const PR_SIGNALS_FRAGMENT = `
+fragment Signals on PullRequest {
+  reviewDecision
+  mergeable
+  headRefOid
+  author { login }
+  reviewRequests(first: 20) {
+    nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } }
+  }
+  reviews(last: 100) {
+    nodes { author { login __typename } state submittedAt commit { oid } }
+  }
+  reviewThreads(first: 100) {
+    nodes {
+      isResolved
+      opener: comments(first: 1) { nodes { author { login __typename } } }
+      latest: comments(last: 1) { nodes { author { login __typename } createdAt reactions { totalCount } } }
+    }
+  }
+  commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
+}`;
+
 const PR_SIGNALS_QUERY = `
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      reviewDecision
-      mergeable
-      headRefOid
-      author { login }
-      reviewRequests(first: 20) {
-        nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } }
-      }
-      reviews(last: 100) {
-        nodes { author { login __typename } state submittedAt commit { oid } }
-      }
-      reviewThreads(first: 100) {
-        nodes {
-          isResolved
-          opener: comments(first: 1) { nodes { author { login __typename } } }
-          latest: comments(last: 1) { nodes { author { login __typename } createdAt reactions { totalCount } } }
-        }
-      }
-      commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
-    }
+    pullRequest(number: $number) { ...Signals }
   }
-}`;
+}
+${PR_SIGNALS_FRAGMENT}`;
+
+const SIGNALS_BATCH_SIZE = 25;
+
+function repoParts(pr) {
+  const [owner, name] = pr.url.replace("https://github.com/", "").split("/");
+  return { owner, name };
+}
 
 async function fetchPRSignals(pr) {
-  const [owner, name] = pr.url.replace("https://github.com/", "").split("/");
+  const { owner, name } = repoParts(pr);
   try {
     const data = await graphql(PR_SIGNALS_QUERY, { owner, name, number: pr.number });
     return mapSignals(data?.repository?.pullRequest, GITHUB_USER);
@@ -629,13 +646,34 @@ async function fetchPRSignals(pr) {
   }
 }
 
+// One GraphQL call for up to SIGNALS_BATCH_SIZE PRs, each under its own alias.
+// Returns an array of signal objects in input order; a failed batch falls
+// back to per-PR fetches so one bad node cannot blank the whole batch.
+async function fetchSignalsBatch(prs) {
+  const parts = prs.map((pr, i) => {
+    const { owner, name } = repoParts(pr);
+    return `p${i}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { pullRequest(number: ${pr.number}) { ...Signals } }`;
+  });
+  const query = `query { ${parts.join("\n")} }\n${PR_SIGNALS_FRAGMENT}`;
+  try {
+    const data = await graphql(query, {});
+    return prs.map((pr, i) => mapSignals(data?.[`p${i}`]?.pullRequest, GITHUB_USER));
+  } catch (e) {
+    console.warn(`  Signals batch of ${prs.length} failed (${e.message}); retrying one by one.`);
+    const out = [];
+    for (const pr of prs) out.push(await fetchPRSignals(pr));
+    return out;
+  }
+}
+
 async function enrichWithSignals(prs, label) {
   if (prs.length === 0) return prs;
-  console.log(`\n  Fetching triage signals for ${prs.length} ${label} PRs...`);
+  console.log(`\n  Fetching triage signals for ${prs.length} ${label} PRs (${Math.ceil(prs.length / SIGNALS_BATCH_SIZE)} batches)...`);
   const enriched = [];
-  for (const pr of prs) {
-    const signals = await fetchPRSignals(pr);
-    enriched.push({ ...pr, ...signals });
+  for (let i = 0; i < prs.length; i += SIGNALS_BATCH_SIZE) {
+    const slice = prs.slice(i, i + SIGNALS_BATCH_SIZE);
+    const signals = await fetchSignalsBatch(slice);
+    slice.forEach((pr, j) => enriched.push({ ...pr, ...signals[j] }));
   }
   return enriched;
 }

@@ -86,7 +86,7 @@ describe("mapSignals: verdicts against the head", () => {
   it("COMMENTED reviews make someone a reviewer but carry no verdict", () => {
     const s = mapSignals(node({ reviews: { nodes: [review("alice", "COMMENTED", "head")] } }), ME);
     assert.equal(s.has_human_reviewer, true);
-    assert.deepEqual(s.reviewers, [{ login: "alice", state: "COMMENTED", stale: false }]);
+    assert.deepEqual(s.reviewers.map(({ at, ...r }) => r), [{ login: "alice", state: "COMMENTED", stale: false }]);
     assert.deepEqual(s.waiting_on, []);
   });
   it("bot reviews and the author's own reviews are ignored", () => {
