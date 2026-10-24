@@ -306,6 +306,49 @@ function fetchPublicJson(url) {
   });
 }
 
+// Known flaky CI failures, from valkey-daily-dashboard's git-tracked
+// flakes.json (config.json `flake_registry`, a URL). The registry's rule is
+// that an entry exists only while an issue or fix PR tracks it, so a job that
+// matches one is "known, tracked", never "fine". Only job-level entries apply
+// here: the registry names them `<job>: unattributed failure`, the parser's
+// bucket for a job that failed outside any test (a setup step, a build).
+// Test-level entries need the job log parsed and are left to lockkeeper.
+const FLAKE_JOB_SUFFIX = ": unattributed failure";
+
+function flakeJobEntries(registry) {
+  const out = [];
+  for (const e of (registry && registry.entries) || []) {
+    if (typeof e.test_name !== "string" || !e.test_name.endsWith(FLAKE_JOB_SUFFIX)) continue;
+    if (!e.issue && !e.fix_pr) continue;
+    out.push({
+      id: e.id || "",
+      job: e.test_name.slice(0, -FLAKE_JOB_SUFFIX.length),
+      issue: e.issue || null,
+      issue_state: e.issue_state || "",
+      issue_title: e.issue_title || "",
+      fix_pr: e.fix_pr || null,
+      fix_sha: e.fix_sha || "",
+    });
+  }
+  return out;
+}
+
+// Fails open: no URL, or a registry that cannot be fetched or parsed, gives
+// null and the dashboard shows CI exactly as before.
+async function loadFlakeRegistry() {
+  const url = config.flake_registry;
+  if (!url) return null;
+  try {
+    const registry = await fetchPublicJson(url);
+    const jobs = flakeJobEntries(registry);
+    console.log(`Flake registry: ${url} (${(registry.entries || []).length} entries, ${jobs.length} job-level)`);
+    return { source: url, fetched_at: new Date().toISOString(), jobs };
+  } catch (e) {
+    console.warn(`  Flake registry unavailable (${e.message}); CI shown without it.`);
+    return null;
+  }
+}
+
 // The previous run's output is the cache. A snapshot for another user or
 // another org set is somebody else's dashboard and is discarded.
 function priorUsable(prior, user, orgs) {
@@ -1182,12 +1225,14 @@ async function main() {
   console.log(`  Mentions: ${mentionsAll.length} found, ${mentions.length} not already on another tab.`);
 
   const merger = await fetchMergerData();
+  const flakes = await loadFlakeRegistry();
 
   const data = {
     github_user: GITHUB_USER,
     orgs: ORGS,
     updated: new Date().toISOString(),
     merger,
+    flakes,
     reviewing: reviewingEnriched,
     open_prs: openPrsEnriched,
     closed_prs: closedPrs,
@@ -1217,7 +1262,7 @@ async function main() {
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { fetchMergerData, monthWindows, isRateLimited, pruneTouchesCache, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep, priorUsable, priorIndex, reuseActivity, reuseCI, MAX_ACTIVITY_AGE_MS };
+  module.exports = { flakeJobEntries, fetchMergerData, monthWindows, isRateLimited, pruneTouchesCache, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep, priorUsable, priorIndex, reuseActivity, reuseCI, MAX_ACTIVITY_AGE_MS };
 }
 
 if (require.main === module) {

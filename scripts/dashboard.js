@@ -87,6 +87,9 @@ let DASHBOARD_MERGE_LABELS = ["to-be-merged"];
 // Orgs / repos where the dashboard user can merge (config.json merge_access).
 // Turns "ready to merge" from "nudge a committer" into the user's own move.
 let DASHBOARD_MERGE_ACCESS = [];
+// Job-level entries of the flake registry, from data.flakes (null when the
+// fetcher had none). See flakeFor() in utils.js.
+let DASHBOARD_FLAKES = null;
 
 function triageOpts(type) {
   return { mergeLabels: DASHBOARD_MERGE_LABELS, type, mergeAccess: DASHBOARD_MERGE_ACCESS };
@@ -251,9 +254,13 @@ function renderPR(pr, type) {
     const rank = { failure: 0, cancelled: 1, action_required: 2, pending: 3, success: 4 };
     const sorted = [...pr.ci_jobs].sort((a, b) => (rank[a.status] ?? 4) - (rank[b.status] ?? 4));
     ciDots = sorted.map(job => {
-      const cls = `ci-dot ci-${job.status}`;
+      // A failure the registry tracks keeps its red (it is still red) and
+      // turns square, so shape and title carry the distinction, not color.
+      const flake = flakeFor(job, DASHBOARD_FLAKES);
+      const cls = `ci-dot ci-${job.status}${flake ? " ci-flake" : ""}`;
+      const title = flake ? `${job.name} · tracked flake: issue ${flake.issue}${flake.issue_state ? ` (${flake.issue_state})` : ""}` : job.name;
       const link = job.url ? ` href="${escapeAttr(job.url)}" target="_blank" rel="noopener"` : "";
-      return `<a class="${cls}"${link} title="${escapeAttr(job.name)}"></a>`;
+      return `<a class="${cls}"${link} title="${escapeAttr(title)}"></a>`;
     }).join("");
   }
 
@@ -283,7 +290,15 @@ function renderPR(pr, type) {
       if ((pr.changes_requested || 0) > 0) parts.push(`<span class="pr-badge badge-changes">✗ changes requested</span>`);
       // Green is already conveyed by the CI dots — only chip CI when it's not.
       const ci = ciState(pr);
-      if (ci === "failure") parts.push(`<span class="pr-badge badge-ci-fail">✗ CI failing</span>`);
+      if (ci === "failure") {
+        // Every red job a tracked flake: reruns or a waiver, not a fix, so it
+        // takes the cancelled chip's neutral style. The dots stay red.
+        const fl = ciFlakes(pr, DASHBOARD_FLAKES);
+        const issues = fl.tracked.map(f => `issue ${f.issue}${f.issue_title ? `: ${f.issue_title}` : ""}`).join("\n");
+        if (fl.all) parts.push(`<span class="pr-badge badge-ci-cancelled" title="${escapeAttr(issues)}">⊘ CI red: tracked flake${fl.red > 1 ? "s" : ""} only</span>`);
+        else if (fl.tracked.length > 0) parts.push(`<span class="pr-badge badge-ci-fail" title="${escapeAttr(issues)}">✗ CI failing · ${fl.tracked.length} of ${fl.red} tracked</span>`);
+        else parts.push(`<span class="pr-badge badge-ci-fail">✗ CI failing</span>`);
+      }
       else if (ci === "cancelled") parts.push(`<span class="pr-badge badge-ci-cancelled">⊘ CI cancelled</span>`);
       else if (ci === "action_required") parts.push(`<span class="pr-badge badge-ci-cancelled" title="First-time contributor: a maintainer must approve the workflow run">⊘ CI awaits approval</span>`);
       if (pr.mergeable === "CONFLICTING") parts.push(`<span class="pr-badge badge-conflict">⚠ conflicts</span>`);
@@ -507,6 +522,7 @@ Promise.all([
     DASHBOARD_USER = data.github_user || config.github_user || "";
     if (Array.isArray(config.merge_labels)) DASHBOARD_MERGE_LABELS = config.merge_labels;
     if (Array.isArray(config.merge_access)) DASHBOARD_MERGE_ACCESS = config.merge_access;
+    DASHBOARD_FLAKES = data.flakes || null;
     if (Number.isFinite(config.stale_after_minutes) && config.stale_after_minutes > 0) STALE_MS = config.stale_after_minutes * 60 * 1000;
     updateFreshness(data);
 
@@ -774,6 +790,7 @@ Promise.all([
       data = fresh;
       reviewing = data.reviewing || [];
       DASHBOARD_USER = data.github_user || DASHBOARD_USER;
+      DASHBOARD_FLAKES = data.flakes || null;
       pruneMarkers();
       buildRepoCheckboxes("repo-checkboxes-reviewing", reviewing, renderReviewing);
       buildRepoCheckboxes("repo-checkboxes-open", data.open_prs, renderOpen);

@@ -71,10 +71,11 @@ in the header clears them. On phones the avatar, number
 and title form a header row and the chips, meta and rail flow beneath.
 
 Beside it, the specific state chips: ✓ approved (or *approved (older head)*),
-✗ changes requested, ✗ CI failing, ⊘ CI cancelled, ⊘ CI awaits approval,
-⚠ conflicts, and the unresolved threads split into *N awaiting you* /
-*N awaiting them* / *N bot*.
-CI is also shown as per-job dots.
+✗ changes requested, ✗ CI failing, ⊘ CI red: tracked flake only, ⊘ CI cancelled,
+⊘ CI awaits approval, ⚠ conflicts, and the unresolved threads split into
+*N awaiting you* / *N awaiting them* / *N bot*.
+CI is also shown as per-job dots; a red dot drawn square is a failure the flake
+registry tracks (hover for the issue).
 
 ### Why not GitHub's own fields?
 
@@ -98,6 +99,16 @@ So the dashboard derives the turn itself:
 - **CI** combines the per-job check-runs with the commit's status rollup, so a
   failed commit status (e.g. DCO) is seen, and a *cancelled* lane is reported as
   such rather than as green or as a failure.
+- **Tracked flakes** come from a flake registry (`config.json` `flake_registry`,
+  a URL to [valkey-daily-dashboard](https://github.com/rainsupreme/valkey-daily-dashboard)'s
+  `flakes.json`). A failed job whose name the registry tracks under an open issue
+  is still red, but its dot is square and its chip reads *CI red: tracked flake
+  only* when every red job is one, in the neutral style of a cancelled lane:
+  the PR needs reruns or a waiver, not a fix. An entry whose fix has merged is
+  not applied, since whether this PR's base carries the fix is not known here.
+  Whose move it is does not change: a tracked flake is still a CI failure to
+  the triage ladders. Only job-level entries (a job red outside any test, such
+  as a setup step) are matched; test-level entries need the job log.
 
 Time is shown (`· 12d`) but is never an input to whose move it is.
 

@@ -65,6 +65,33 @@ function ciState(pr) {
   return "";
 }
 
+// The registry entry a failed job matches, or null. `flakes` is data.flakes
+// from the fetcher (job-level entries of valkey-daily-dashboard's registry).
+// Only an entry still being tracked applies: one with a merged fix is not
+// applied, because whether this PR's base carries that fix is a per-PR
+// question this dashboard does not answer (lockkeeper does), and an entry
+// whose issue was closed with no fix is a registry maintenance item, not a
+// classification. A match annotates the failure; it never hides it.
+function flakeFor(job, flakes) {
+  if (!job || job.status !== "failure" || !flakes || !Array.isArray(flakes.jobs)) return null;
+  for (const e of flakes.jobs) {
+    if (e.job !== job.name) continue;
+    if (e.fix_sha || e.issue_state === "closed") continue;
+    return e;
+  }
+  return null;
+}
+
+// Red jobs on a PR split into tracked flakes and the rest. `all` is true when
+// every red job is a tracked flake: the PR needs reruns or a waiver, not a
+// fix, which is what the chip then says. ciState() is unchanged by this; a
+// tracked flake still counts as a failure for whose-move purposes.
+function ciFlakes(pr, flakes) {
+  const red = (pr.ci_jobs || []).filter((j) => j.status === "failure");
+  const tracked = red.map((j) => flakeFor(j, flakes)).filter(Boolean);
+  return { red: red.length, tracked, all: red.length > 0 && tracked.length === red.length };
+}
+
 function hasMergeLabel(pr, mergeLabels) {
   if (!mergeLabels || mergeLabels.length === 0) return false;
   const set = new Set(mergeLabels);
@@ -273,5 +300,5 @@ function dataAgeLabel(ms) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, normalizeMarker, myLastAction, pinStillHolds, isStale, staleAgeLabel, dataAgeLabel };
+  module.exports = { timeAgo, daysOld, escapeAttr, formatDate, sortPRs, filterUnreadActivity, ciState, flakeFor, ciFlakes, hasMergeLabel, canMerge, isClearToLand, isBroken, whoseMove, isActionable, computeTriageScore, countActionable, normalizeMarker, myLastAction, pinStillHolds, isStale, staleAgeLabel, dataAgeLabel };
 }
