@@ -26,6 +26,7 @@ the number is above zero. Color applies only to lit cards (see README).
 | `data/prs.json` | PR data fetched from GitHub API (refreshed at deploy time) |
 | `scripts/fetch-prs.js` | Node script that queries GitHub Search API and writes `data/prs.json` |
 | `.github/workflows/update.yml` | GitHub Actions workflow — builds + deploys via Pages |
+| `tests/` | `node --test`; `tests/flakes.test.js` covers the registry reducer and matching |
 | `AGENTS.md` | This file |
 
 ## Architecture
@@ -104,6 +105,30 @@ takes an `isPinned` predicate so pinned rows light the card. Below 600px `.pr-it
 switches to a grid (`ava num title rail` header row, then chips/meta/ci/activity
 full-width) with `.pr-content`/`.pr-title-row` as `display: contents`, so the row
 markup is the same at every width.
+
+## Flake registry
+
+`config.json` `flake_registry` (a URL; absent or unreachable fails open with a
+warning) is fetched once per run by `loadFlakeRegistry()` in
+`scripts/fetch-prs.js`. `flakeJobEntries()` keeps the job-level entries, those
+named `<job>: unattributed failure` (valkey-daily-dashboard's parser bucket for
+a job red outside any test) that carry an `issue` or `fix_pr`, and publishes
+them as `data.flakes = { source, repo, fetched_at, jobs[] }`.
+`refreshFlakeIssueStates()` first reads each entry's live issue state and title
+(one REST call per job-level entry; a failure keeps the registry's cached value),
+because the registry's own `flakes refresh` output cannot be persisted by its
+artifact-based Pages workflow. `repo` is `config.flake_registry_repo` (default
+`valkey-io/valkey`). Matching happens at render time in `flakeFor()` /
+`ciFlakes()` (`scripts/utils.js`), so the `reuseCI()` cache never carries a stale
+annotation: on a PR whose URL is in `flakes.repo` (`flakeRepoMatches()`), a
+`ci_jobs[]` entry with `status: "failure"` and a `name` equal to an entry's `job`
+matches while the entry has no `fix_sha` and its `issue_state` is not `closed`. `renderPR()` adds
+`ci-flake` (square) to the dot and swaps the CI chip for `⊘ CI red: tracked
+flake only` (neutral `badge-ci-cancelled` style) when every red job matched, or
+appends `· N of M tracked` to `✗ CI failing` otherwise. `ciState()`, `isBroken()`
+and `whoseMove()` are deliberately unchanged: annotating is display; waiving is
+a judgment the user records elsewhere. Fixed-but-maybe-not-in-base and
+test-level matching are lockkeeper's job.
 
 ## Merger row
 

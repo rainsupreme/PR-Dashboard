@@ -5,6 +5,7 @@
   ],
   "title": "PR Dashboard",
   "stale_after_minutes": 45,
+  "flake_registry": "https://raw.githubusercontent.com/rainsupreme/valkey-daily-dashboard/main/flakes.json",
   "merge_labels": [
     "to-be-merged"
   ],
