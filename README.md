@@ -101,8 +101,11 @@ So the dashboard derives the turn itself:
   such rather than as green or as a failure.
 - **Tracked flakes** come from a flake registry (`config.json` `flake_registry`,
   a URL to [valkey-daily-dashboard](https://github.com/rainsupreme/valkey-daily-dashboard)'s
-  `flakes.json`). A failed job whose name the registry tracks under an open issue
-  is still red, but its dot is square and its chip reads *CI red: tracked flake
+  `flakes.json`, describing the one repository in `flake_registry_repo`, default
+  `valkey-io/valkey`). Each entry's issue state is read live at fetch time, so an
+  issue closed since the registry was last refreshed stops applying within the
+  dashboard's own cadence. A failed job whose name the registry tracks under an
+  open issue is still red, but its dot is square and its chip reads *CI red: tracked flake
   only* when every red job is one, in the neutral style of a cancelled lane:
   the PR needs reruns or a waiver, not a fix. An entry whose fix has merged is
   not applied, since whether this PR's base carries the fix is not known here.

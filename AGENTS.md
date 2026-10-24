@@ -113,11 +113,16 @@ warning) is fetched once per run by `loadFlakeRegistry()` in
 `scripts/fetch-prs.js`. `flakeJobEntries()` keeps the job-level entries, those
 named `<job>: unattributed failure` (valkey-daily-dashboard's parser bucket for
 a job red outside any test) that carry an `issue` or `fix_pr`, and publishes
-them as `data.flakes = { source, fetched_at, jobs[] }`. Matching happens at
-render time in `flakeFor()` / `ciFlakes()` (`scripts/utils.js`), so the
-`reuseCI()` cache never carries a stale annotation: a `ci_jobs[]` entry with
-`status: "failure"` and a `name` equal to an entry's `job` matches while the
-entry has no `fix_sha` and its `issue_state` is not `closed`. `renderPR()` adds
+them as `data.flakes = { source, repo, fetched_at, jobs[] }`.
+`refreshFlakeIssueStates()` first reads each entry's live issue state and title
+(one REST call per job-level entry; a failure keeps the registry's cached value),
+because the registry's own `flakes refresh` output cannot be persisted by its
+artifact-based Pages workflow. `repo` is `config.flake_registry_repo` (default
+`valkey-io/valkey`). Matching happens at render time in `flakeFor()` /
+`ciFlakes()` (`scripts/utils.js`), so the `reuseCI()` cache never carries a stale
+annotation: on a PR whose URL is in `flakes.repo` (`flakeRepoMatches()`), a
+`ci_jobs[]` entry with `status: "failure"` and a `name` equal to an entry's `job`
+matches while the entry has no `fix_sha` and its `issue_state` is not `closed`. `renderPR()` adds
 `ci-flake` (square) to the dot and swaps the CI chip for `⊘ CI red: tracked
 flake only` (neutral `badge-ci-cancelled` style) when every red job matched, or
 appends `· N of M tracked` to `✗ CI failing` otherwise. `ciState()`, `isBroken()`

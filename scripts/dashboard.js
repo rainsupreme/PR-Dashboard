@@ -256,7 +256,7 @@ function renderPR(pr, type) {
     ciDots = sorted.map(job => {
       // A failure the registry tracks keeps its red (it is still red) and
       // turns square, so shape and title carry the distinction, not color.
-      const flake = flakeFor(job, DASHBOARD_FLAKES);
+      const flake = flakeFor(job, DASHBOARD_FLAKES, pr);
       const cls = `ci-dot ci-${job.status}${flake ? " ci-flake" : ""}`;
       const title = flake ? `${job.name} · tracked flake: issue ${flake.issue}${flake.issue_state ? ` (${flake.issue_state})` : ""}` : job.name;
       const link = job.url ? ` href="${escapeAttr(job.url)}" target="_blank" rel="noopener"` : "";

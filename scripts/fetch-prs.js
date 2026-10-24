@@ -333,16 +333,39 @@ function flakeJobEntries(registry) {
   return out;
 }
 
+// The registry's cached issue_state is only as fresh as its last `flakes
+// refresh`, which its own Pages workflow cannot persist. One REST call per
+// job-level entry (one, today) reads the live state so an issue closed an hour
+// ago stops softening failures at this dashboard's cadence, not the registry's.
+// A failed lookup keeps the cached value.
+async function refreshFlakeIssueStates(jobs, repo, req = request) {
+  for (const e of jobs) {
+    if (!e.issue) continue;
+    try {
+      const { body } = await req(`https://api.github.com/repos/${repo}/issues/${e.issue}`);
+      if (body && body.state) e.issue_state = body.state;
+      if (body && body.title) e.issue_title = body.title;
+    } catch (err) {
+      console.warn(`  Flake issue ${repo}#${e.issue}: ${err.message}; keeping cached state "${e.issue_state || "unknown"}".`);
+    }
+  }
+  return jobs;
+}
+
 // Fails open: no URL, or a registry that cannot be fetched or parsed, gives
-// null and the dashboard shows CI exactly as before.
+// null and the dashboard shows CI exactly as before. The registry describes
+// one repository (config.json `flake_registry_repo`, default valkey-io/valkey);
+// `repo` is published so matching never crosses into another repo's jobs.
+const FLAKE_REGISTRY_REPO = config.flake_registry_repo || "valkey-io/valkey";
+
 async function loadFlakeRegistry() {
   const url = config.flake_registry;
   if (!url) return null;
   try {
     const registry = await fetchPublicJson(url);
-    const jobs = flakeJobEntries(registry);
-    console.log(`Flake registry: ${url} (${(registry.entries || []).length} entries, ${jobs.length} job-level)`);
-    return { source: url, fetched_at: new Date().toISOString(), jobs };
+    const jobs = await refreshFlakeIssueStates(flakeJobEntries(registry), FLAKE_REGISTRY_REPO);
+    console.log(`Flake registry: ${url} (${(registry.entries || []).length} entries, ${jobs.length} job-level, repo ${FLAKE_REGISTRY_REPO})`);
+    return { source: url, repo: FLAKE_REGISTRY_REPO, fetched_at: new Date().toISOString(), jobs };
   } catch (e) {
     console.warn(`  Flake registry unavailable (${e.message}); CI shown without it.`);
     return null;
@@ -1262,7 +1285,7 @@ async function main() {
 
 // Allow importing for tests
 if (typeof module !== "undefined") {
-  module.exports = { flakeJobEntries, fetchMergerData, monthWindows, isRateLimited, pruneTouchesCache, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep, priorUsable, priorIndex, reuseActivity, reuseCI, MAX_ACTIVITY_AGE_MS };
+  module.exports = { flakeJobEntries, refreshFlakeIssueStates, fetchMergerData, monthWindows, isRateLimited, pruneTouchesCache, mapPR, mapMention, dedupeMentions, mentionAnchor, mapComment, mapReview, mapCommit, mapReviewComment, mapSignals, botVerdict, mergeReviewing, fetchActivity, fetchCIStatus, fetchPRSignals, fetchIssueActivity, request, graphql, searchAll, sleep, priorUsable, priorIndex, reuseActivity, reuseCI, MAX_ACTIVITY_AGE_MS };
 }
 
 if (require.main === module) {
